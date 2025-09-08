@@ -162,12 +162,37 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     cancellationToken);
             }
 
-            streamPayload = await EncryptionProcessor.EncryptAsync(
-                streamPayload,
-                this.Encryptor,
-                encryptionItemRequestOptions.EncryptionOptions,
-                diagnosticsContext,
-                cancellationToken);
+            // Encrypt (honor per-request JsonProcessor when preview streaming is enabled)
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+            if (encryptionItemRequestOptions.EncryptionOptions.JsonProcessor == JsonProcessor.Stream)
+            {
+#pragma warning disable CS0618 // Type or member is obsolete
+                if (encryptionItemRequestOptions.EncryptionOptions.EncryptionAlgorithm != CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized)
+                {
+                    throw new NotSupportedException("Streaming JsonProcessor currently supported only for MDE algorithm.");
+                }
+#pragma warning restore CS0618
+                MemoryStream encryptedOut = new (capacity: 16 * 1024); // small initial capacity; will grow as needed
+                await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    encryptedOut,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+                encryptedOut.Position = 0;
+                streamPayload = encryptedOut;
+            }
+            else
+#endif
+            {
+                streamPayload = await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+            }
 
             ResponseMessage responseMessage = await this.container.CreateItemStreamAsync(
                 streamPayload,
@@ -177,11 +202,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             if (decryptResponse)
             {
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
+                    responseMessage.Content,
+                    this.Encryptor,
+                    diagnosticsContext,
+                    encryptionItemRequestOptions.EncryptionOptions.JsonProcessor,
+                    cancellationToken);
+#else
                 (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
                     responseMessage.Content,
                     this.Encryptor,
                     diagnosticsContext,
                     cancellationToken);
+#endif
             }
 
             return responseMessage;
@@ -432,7 +466,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             CancellationToken cancellationToken)
         {
             if (requestOptions is not EncryptionItemRequestOptions encryptionItemRequestOptions ||
-                    encryptionItemRequestOptions.EncryptionOptions == null)
+                encryptionItemRequestOptions.EncryptionOptions == null)
             {
                 return await this.container.ReplaceItemStreamAsync(
                     streamPayload,
@@ -442,12 +476,37 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     cancellationToken);
             }
 
-            streamPayload = await EncryptionProcessor.EncryptAsync(
-                streamPayload,
-                this.Encryptor,
-                encryptionItemRequestOptions.EncryptionOptions,
-                diagnosticsContext,
-                cancellationToken);
+            // Encrypt (honor per-request JsonProcessor when preview streaming is enabled)
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+            if (encryptionItemRequestOptions.EncryptionOptions.JsonProcessor == JsonProcessor.Stream)
+            {
+#pragma warning disable CS0618 // Type or member is obsolete
+                if (encryptionItemRequestOptions.EncryptionOptions.EncryptionAlgorithm != CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized)
+                {
+                    throw new NotSupportedException("Streaming JsonProcessor currently supported only for MDE algorithm.");
+                }
+#pragma warning restore CS0618
+                MemoryStream encryptedOut = new (capacity: 16 * 1024);
+                await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    encryptedOut,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+                encryptedOut.Position = 0;
+                streamPayload = encryptedOut;
+            }
+            else
+#endif
+            {
+                streamPayload = await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+            }
 
             ResponseMessage responseMessage = await this.container.ReplaceItemStreamAsync(
                 streamPayload,
@@ -458,11 +517,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             if (decryptResponse)
             {
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
+                    responseMessage.Content,
+                    this.Encryptor,
+                    diagnosticsContext,
+                    encryptionItemRequestOptions.EncryptionOptions.JsonProcessor,
+                    cancellationToken);
+#else
                 (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
                     responseMessage.Content,
                     this.Encryptor,
                     diagnosticsContext,
                     cancellationToken);
+#endif
             }
 
             return responseMessage;
@@ -576,7 +644,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             CancellationToken cancellationToken)
         {
             if (requestOptions is not EncryptionItemRequestOptions encryptionItemRequestOptions ||
-                    encryptionItemRequestOptions.EncryptionOptions == null)
+                encryptionItemRequestOptions.EncryptionOptions == null)
             {
                 return await this.container.UpsertItemStreamAsync(
                     streamPayload,
@@ -585,12 +653,37 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     cancellationToken);
             }
 
-            streamPayload = await EncryptionProcessor.EncryptAsync(
-                streamPayload,
-                this.Encryptor,
-                encryptionItemRequestOptions.EncryptionOptions,
-                diagnosticsContext,
-                cancellationToken);
+            // Encrypt (honor per-request JsonProcessor when preview streaming is enabled)
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+            if (encryptionItemRequestOptions.EncryptionOptions.JsonProcessor == JsonProcessor.Stream)
+            {
+#pragma warning disable CS0618 // Type or member is obsolete
+                if (encryptionItemRequestOptions.EncryptionOptions.EncryptionAlgorithm != CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized)
+                {
+                    throw new NotSupportedException("Streaming JsonProcessor currently supported only for MDE algorithm.");
+                }
+#pragma warning restore CS0618
+                MemoryStream encryptedOut = new (capacity: 16 * 1024);
+                await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    encryptedOut,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+                encryptedOut.Position = 0;
+                streamPayload = encryptedOut;
+            }
+            else
+#endif
+            {
+                streamPayload = await EncryptionProcessor.EncryptAsync(
+                    streamPayload,
+                    this.Encryptor,
+                    encryptionItemRequestOptions.EncryptionOptions,
+                    diagnosticsContext,
+                    cancellationToken);
+            }
 
             ResponseMessage responseMessage = await this.container.UpsertItemStreamAsync(
                 streamPayload,
@@ -600,11 +693,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             if (decryptResponse)
             {
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
+                    responseMessage.Content,
+                    this.Encryptor,
+                    diagnosticsContext,
+                    encryptionItemRequestOptions.EncryptionOptions.JsonProcessor,
+                    cancellationToken);
+#else
                 (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
                     responseMessage.Content,
                     this.Encryptor,
                     diagnosticsContext,
                     cancellationToken);
+#endif
             }
 
             return responseMessage;
