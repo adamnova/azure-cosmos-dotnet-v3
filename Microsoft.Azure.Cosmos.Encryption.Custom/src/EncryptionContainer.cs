@@ -130,7 +130,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 throw new ArgumentNullException(nameof(streamPayload));
             }
 #endif
-
             CosmosDiagnosticsContext diagnosticsContext = CosmosDiagnosticsContext.Create(requestOptions);
             using (diagnosticsContext.CreateScope("CreateItemStream"))
             {
@@ -184,7 +183,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 streamPayload = encryptedOut;
             }
             else
-#endif
             {
                 streamPayload = await EncryptionProcessor.EncryptAsync(
                     streamPayload,
@@ -193,6 +191,16 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     diagnosticsContext,
                     cancellationToken);
             }
+#endif
+
+#if !(ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER)
+            streamPayload = await EncryptionProcessor.EncryptAsync(
+                streamPayload,
+                this.Encryptor,
+                encryptionItemRequestOptions.EncryptionOptions,
+                diagnosticsContext,
+                cancellationToken);
+#endif
 
             ResponseMessage responseMessage = await this.container.CreateItemStreamAsync(
                 streamPayload,
@@ -325,11 +333,27 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             if (decryptResponse)
             {
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
+                if (requestOptions is EncryptionReadItemRequestOptions readOptions)
+                {
+                    jsonProcessor = readOptions.JsonProcessor;
+                }
+
+                (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
+                    responseMessage.Content,
+                    this.Encryptor,
+                    diagnosticsContext,
+                    jsonProcessor,
+                    cancellationToken);
+#else
                 (responseMessage.Content, _) = await EncryptionProcessor.DecryptAsync(
                     responseMessage.Content,
                     this.Encryptor,
                     diagnosticsContext,
                     cancellationToken);
+#endif
+
             }
 
             return responseMessage;
