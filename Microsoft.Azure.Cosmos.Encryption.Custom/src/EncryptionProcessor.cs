@@ -21,6 +21,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
     /// </summary>
     internal static class EncryptionProcessor
     {
+#pragma warning disable SA1513 // Closing brace should be followed by blank line
         internal static readonly JsonSerializerSettings JsonSerializerSettings = new ()
         {
             DateParseHandling = DateParseHandling.None,
@@ -416,9 +417,81 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 }
             }
 
-            // the contents of contentJObj get decrypted in place for MDE algorithm model, and for legacy model _ei property is removed
-            // and corresponding decrypted properties are added back in the documents.
             return BaseSerializer.ToStream(contentJObj);
         }
+
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+        internal static async Task<Stream> DeserializeAndDecryptResponseAsync(
+            Stream content,
+            Encryptor encryptor,
+            JsonProcessor jsonProcessor,
+            CancellationToken cancellationToken)
+        {
+            if (jsonProcessor == JsonProcessor.Stream)
+            {
+                return await DeserializeAndDecryptResponseStreamAsync(content, encryptor, cancellationToken);
+            }
+
+            // Fallback to existing Newtonsoft path
+            return await DeserializeAndDecryptResponseAsync(content, encryptor, cancellationToken);
+        }
+
+        private static async Task<Stream> DeserializeAndDecryptResponseStreamAsync(
+            Stream content,
+            Encryptor encryptor,
+            CancellationToken cancellationToken)
+        {
+            if (content == null)
+            {
+                return content;
+            }
+
+            content.Position = 0;
+            using System.Text.Json.JsonDocument doc = await System.Text.Json.JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
+            System.Text.Json.JsonElement root = doc.RootElement;
+            if (!root.TryGetProperty(Constants.DocumentsResourcePropertyName, out System.Text.Json.JsonElement documents) || documents.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                throw new InvalidOperationException("Feed Response body contract was violated. Feed response did not have an array of Documents");
+            }
+
+            System.IO.MemoryStream output = new ();
+            using (System.Text.Json.Utf8JsonWriter writer = new (output))
+            {
+                writer.WriteStartObject();
+                foreach (System.Text.Json.JsonProperty prop in root.EnumerateObject())
+                {
+                    if (prop.NameEquals(Constants.DocumentsResourcePropertyName))
+                    {
+                        writer.WritePropertyName(prop.Name);
+                        writer.WriteStartArray();
+                        foreach (System.Text.Json.JsonElement docElem in documents.EnumerateArray())
+                        {
+                            string raw = docElem.GetRawText();
+                            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(raw);
+                            using System.IO.MemoryStream ms = new (bytes, writable: false);
+                            CosmosDiagnosticsContext diagnosticsContext = CosmosDiagnosticsContext.Create(null);
+                            (Stream decrypted, _) = await DecryptStreamAsync(ms, encryptor, diagnosticsContext, cancellationToken);
+                            decrypted.Position = 0;
+                            using System.Text.Json.JsonDocument decryptedDoc = await System.Text.Json.JsonDocument.ParseAsync(decrypted, cancellationToken: cancellationToken);
+                            decryptedDoc.RootElement.WriteTo(writer);
+                        }
+                        writer.WriteEndArray();
+                    }
+                    else
+                    {
+                        prop.WriteTo(writer);
+                    }
+                }
+
+                writer.WriteEndObject();
+
+                writer.Flush();
+            }
+
+            output.Position = 0;
+            return output;
+        }
+
+#endif
     }
 }
