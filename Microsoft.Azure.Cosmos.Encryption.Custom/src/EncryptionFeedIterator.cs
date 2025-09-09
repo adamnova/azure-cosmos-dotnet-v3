@@ -16,15 +16,22 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         private readonly FeedIterator feedIterator;
         private readonly Encryptor encryptor;
         private readonly CosmosSerializer cosmosSerializer;
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+        private readonly JsonProcessor jsonProcessor;
+#endif
 
         public EncryptionFeedIterator(
             FeedIterator feedIterator,
             Encryptor encryptor,
-            CosmosSerializer cosmosSerializer)
+            CosmosSerializer cosmosSerializer,
+            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft)
         {
             this.feedIterator = feedIterator;
             this.encryptor = encryptor;
             this.cosmosSerializer = cosmosSerializer;
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+            this.jsonProcessor = jsonProcessor;
+#endif
         }
 
         public override bool HasMoreResults => this.feedIterator.HasMoreResults;
@@ -38,10 +45,24 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
                 if (responseMessage.IsSuccessStatusCode && responseMessage.Content != null)
                 {
-                    Stream decryptedContent = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
+                    Stream decryptedContent;
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                    decryptedContent = this.jsonProcessor == JsonProcessor.Stream
+                        ? await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
+                            responseMessage.Content,
+                            this.encryptor,
+                            this.jsonProcessor,
+                            cancellationToken)
+                        : await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
+                            responseMessage.Content,
+                            this.encryptor,
+                            cancellationToken);
+#else
+                    decryptedContent = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                         responseMessage.Content,
                         this.encryptor,
                         cancellationToken);
+#endif
 
                     return new DecryptedResponseMessage(responseMessage, decryptedContent);
                 }

@@ -884,13 +884,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             string continuationToken = null,
             QueryRequestOptions requestOptions = null)
         {
+            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
+            if (requestOptions is EncryptionQueryRequestOptions encryptionQueryRequestOptions)
+            {
+                jsonProcessor = encryptionQueryRequestOptions.JsonProcessor;
+            }
+
             return new EncryptionFeedIterator(
                 this.container.GetItemQueryStreamIterator(
                     queryDefinition,
                     continuationToken,
                     requestOptions),
                 this.Encryptor,
-                this.CosmosSerializer);
+                this.CosmosSerializer,
+                jsonProcessor);
         }
 
         public override FeedIterator GetItemQueryStreamIterator(
@@ -898,13 +905,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             string continuationToken = null,
             QueryRequestOptions requestOptions = null)
         {
+            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
+            if (requestOptions is EncryptionQueryRequestOptions encryptionQueryRequestOptions)
+            {
+                jsonProcessor = encryptionQueryRequestOptions.JsonProcessor;
+            }
+
             return new EncryptionFeedIterator(
                 this.container.GetItemQueryStreamIterator(
                     queryText,
                     continuationToken,
                     requestOptions),
                 this.Encryptor,
-                this.CosmosSerializer);
+                this.CosmosSerializer,
+                jsonProcessor);
         }
 
         public override Task<ThroughputResponse> ReplaceThroughputAsync(
@@ -930,6 +944,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             string continuationToken,
             QueryRequestOptions requestOptions = null)
         {
+            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
+            if (requestOptions is EncryptionQueryRequestOptions encryptionQueryRequestOptions)
+            {
+                jsonProcessor = encryptionQueryRequestOptions.JsonProcessor;
+            }
+
             return new EncryptionFeedIterator(
                 this.container.GetItemQueryStreamIterator(
                     feedRange,
@@ -937,7 +957,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     continuationToken,
                     requestOptions),
                 this.Encryptor,
-                this.CosmosSerializer);
+                this.CosmosSerializer,
+                jsonProcessor);
         }
 
         public override FeedIterator<T> GetItemQueryIterator<T>(
@@ -967,13 +988,17 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             ChangeFeedMode changeFeedMode,
             ChangeFeedRequestOptions changeFeedRequestOptions = null)
         {
+            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
+            if (EncryptionChangeFeedJsonProcessorOptions.TryGet(changeFeedRequestOptions, out JsonProcessor selected))
+            {
+                jsonProcessor = selected;
+            }
+
             return new EncryptionFeedIterator(
-                this.container.GetChangeFeedStreamIterator(
-                    changeFeedStartFrom,
-                    changeFeedMode,
-                    changeFeedRequestOptions),
+                this.container.GetChangeFeedStreamIterator(changeFeedStartFrom, changeFeedMode, changeFeedRequestOptions),
                 this.Encryptor,
-                this.CosmosSerializer);
+                this.CosmosSerializer,
+                jsonProcessor);
         }
 
         public override FeedIterator<T> GetChangeFeedIterator<T>(
@@ -1080,6 +1105,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     Stream changes,
                     CancellationToken cancellationToken) =>
                 {
+                    // Change feed stream decrypt currently always uses Newtonsoft processor.
                     Stream decryptedChanges = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                         changes,
                         this.Encryptor,
@@ -1102,6 +1128,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                     Func<Task> tryCheckpointAsync,
                     CancellationToken cancellationToken) =>
                 {
+                    // Change feed stream decrypt currently always uses Newtonsoft processor.
                     Stream decryptedChanges = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                         changes,
                         this.Encryptor,
@@ -1186,6 +1213,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 readManyRequestOptions,
                 cancellationToken);
 
+                // ReadMany decrypt currently always uses Newtonsoft path; future Stream processor support could be added.
             Stream decryptedContent = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                 responseMessage.Content,
                 this.Encryptor,
