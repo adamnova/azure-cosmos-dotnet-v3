@@ -1213,7 +1213,16 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 readManyRequestOptions,
                 cancellationToken);
 
-                // ReadMany decrypt currently always uses Newtonsoft path; future Stream processor support could be added.
+                // ReadMany decrypt currently always uses Newtonsoft path.
+#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
+                // TODO(StreamProcessor): Add streaming JsonProcessor support for ReadMany. Today even if an
+                // EncryptionReadManyRequestOptions (internal) specifies JsonProcessor.Stream we intentionally
+                // fall back to the legacy Newtonsoft path. When implementing:
+                // 1. Detect requested JsonProcessor (if/when exposed) similar to query/change feed.
+                // 2. Add a DeserializeAndDecryptResponseAsync overload invocation with JsonProcessor parameter.
+                // 3. Provide diagnostics scope / marker parity (e.g., "EncryptionProcessor.ReadManyDecrypt.Stream").
+                // 4. Consider whether to throw NotSupportedException vs silent fallback when algorithm != MDE.
+#endif
             Stream decryptedContent = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                 responseMessage.Content,
                 this.Encryptor,

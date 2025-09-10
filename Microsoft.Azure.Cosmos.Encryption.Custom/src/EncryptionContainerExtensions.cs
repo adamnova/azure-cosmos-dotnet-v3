@@ -33,9 +33,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// This will create the fresh new FeedIterator when called which will support decryption.
         /// </summary>
         /// <typeparam name="T">the type of object to query.</typeparam>
-    /// <param name="container">the encryption container.</param>
-    /// <param name="query">the IQueryable{T} to be converted.</param>
-    /// <remarks>Uses default Newtonsoft Json processor; per-request selection available via ToEncryptionStreamIterator overload.</remarks>
+        /// <param name="container">the encryption container.</param>
+        /// <param name="query">the IQueryable{T} to be converted.</param>
+        /// <remarks>Uses default Newtonsoft Json processor; per-request selection available via ToEncryptionStreamIterator overload.</remarks>
         /// <returns>An iterator to go through the items.</returns>
         /// <example>
         /// This example shows how to get FeedIterator from LINQ.
@@ -68,7 +68,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// <typeparam name="T">the type of object to query.</typeparam>
         /// <param name="container">the encryption container.</param>
         /// <param name="query">the IQueryable{T} to be converted.</param>
-    /// <param name="jsonProcessor">Json processing mode for decryption of results (defaults to Newtonsoft path).</param>
+        /// <param name="jsonProcessor">Json processing mode for decryption of results (defaults to Newtonsoft path).</param>
         /// <returns>An iterator to go through the items.</returns>
         /// <example>
         /// This example shows how to get FeedIterator from LINQ.

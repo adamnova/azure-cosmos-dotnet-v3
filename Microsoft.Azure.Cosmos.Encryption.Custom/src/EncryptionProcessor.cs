@@ -47,7 +47,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             CosmosDiagnosticsContext diagnosticsContext,
             CancellationToken cancellationToken)
         {
-            _ = diagnosticsContext;
+            // diagnosticsContext may be null in some internal call sites, so guard before creating scopes.
 
             ValidateInputForEncrypt(
                 input,
@@ -59,6 +59,23 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 return input;
             }
 
+            // Legacy (non-streaming) encrypt scope
+            if (diagnosticsContext != null)
+            {
+                using (diagnosticsContext.CreateScope("EncryptionProcessor.Encrypt.Legacy"))
+                {
+#pragma warning disable CS0618 // Type or member is obsolete
+                    return encryptionOptions.EncryptionAlgorithm switch
+                    {
+                        CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized => await MdeEncryptionProcessor.EncryptAsync(input, encryptor, encryptionOptions, cancellationToken),
+                        CosmosEncryptionAlgorithm.AEAes256CbcHmacSha256Randomized => await AeAesEncryptionProcessor.EncryptAsync(input, encryptor, encryptionOptions, cancellationToken),
+                        _ => throw new NotSupportedException($"Encryption Algorithm : {encryptionOptions.EncryptionAlgorithm} is not supported."),
+                    };
+#pragma warning restore CS0618 // Type or member is obsolete
+                }
+            }
+
+            // Fallback in case diagnosticsContext was null
 #pragma warning disable CS0618 // Type or member is obsolete
             return encryptionOptions.EncryptionAlgorithm switch
             {
@@ -78,7 +95,27 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             CosmosDiagnosticsContext diagnosticsContext,
             CancellationToken cancellationToken)
         {
-            _ = diagnosticsContext;
+            // Streaming encrypt scope
+            if (diagnosticsContext != null)
+            {
+                using (IDisposable encryptStreamScope = diagnosticsContext.CreateScope("EncryptionProcessor.Encrypt.Stream"))
+                {
+                    await EncryptStreamInternalAsync(input, output, encryptor, encryptionOptions, diagnosticsContext, cancellationToken);
+                    return;
+                }
+            }
+            await EncryptStreamInternalAsync(input, output, encryptor, encryptionOptions, diagnosticsContext, cancellationToken);
+        }
+
+        private static async Task EncryptStreamInternalAsync(
+            Stream input,
+            Stream output,
+            Encryptor encryptor,
+            EncryptionOptions encryptionOptions,
+            CosmosDiagnosticsContext diagnosticsContext,
+            CancellationToken cancellationToken)
+        {
+            _ = diagnosticsContext; // ensure recognized as used for style
 
             ValidateInputForEncrypt(
                 input,
@@ -134,7 +171,18 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 return (input, null);
             }
 
-            DecryptionContext decryptionContext = await DecryptInternalAsync(encryptor, diagnosticsContext, itemJObj, encryptionPropertiesJObj, cancellationToken);
+            DecryptionContext decryptionContext;
+            if (diagnosticsContext != null)
+            {
+                using (diagnosticsContext.CreateScope("EncryptionProcessor.Decrypt.Legacy"))
+                {
+                    decryptionContext = await DecryptInternalAsync(encryptor, diagnosticsContext, itemJObj, encryptionPropertiesJObj, cancellationToken);
+                }
+            }
+            else
+            {
+                decryptionContext = await DecryptInternalAsync(encryptor, diagnosticsContext, itemJObj, encryptionPropertiesJObj, cancellationToken);
+            }
 #if NET8_0_OR_GREATER
             await input.DisposeAsync();
 #else
@@ -250,7 +298,18 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             MemoryStream ms = new ();
 
-            DecryptionContext context = await StreamProcessor.DecryptStreamAsync(input, ms, encryptor, properties.EncryptionProperties, diagnosticsContext, cancellationToken);
+            DecryptionContext context;
+            if (diagnosticsContext != null)
+            {
+                using (diagnosticsContext.CreateScope("EncryptionProcessor.Decrypt.Stream"))
+                {
+                    context = await StreamProcessor.DecryptStreamAsync(input, ms, encryptor, properties.EncryptionProperties, diagnosticsContext, cancellationToken);
+                }
+            }
+            else
+            {
+                context = await StreamProcessor.DecryptStreamAsync(input, ms, encryptor, properties.EncryptionProperties, diagnosticsContext, cancellationToken);
+            }
             if (context == null)
             {
                 input.Position = 0;
@@ -427,13 +486,23 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             JsonProcessor jsonProcessor,
             CancellationToken cancellationToken)
         {
-            if (jsonProcessor == JsonProcessor.Stream)
+            // Single explicit decision point for feed decrypt path.
+            CosmosDiagnosticsContext diagnosticsContext = CosmosDiagnosticsContext.Create(null);
+            switch (jsonProcessor)
             {
-                return await DeserializeAndDecryptResponseStreamAsync(content, encryptor, cancellationToken);
+                case JsonProcessor.Stream:
+                    using (diagnosticsContext.CreateScope("EncryptionProcessor.FeedDecrypt.Stream"))
+                    {
+                        return await DeserializeAndDecryptResponseStreamAsync(content, encryptor, cancellationToken);
+                    }
+                case JsonProcessor.Newtonsoft:
+                    using (diagnosticsContext.CreateScope("EncryptionProcessor.FeedDecrypt.Legacy"))
+                    {
+                        return await DeserializeAndDecryptResponseAsync(content, encryptor, cancellationToken);
+                    }
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(jsonProcessor), jsonProcessor, "Unsupported json processor.");
             }
-
-            // Fallback to existing Newtonsoft path
-            return await DeserializeAndDecryptResponseAsync(content, encryptor, cancellationToken);
         }
 
         private static async Task<Stream> DeserializeAndDecryptResponseStreamAsync(

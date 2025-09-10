@@ -9,6 +9,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
     using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
+    using Microsoft.Azure.Cosmos.Diagnostics;
     using Newtonsoft.Json.Linq;
 
     internal sealed class EncryptionFeedIterator : FeedIterator
@@ -56,15 +57,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                         : await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                             responseMessage.Content,
                             this.encryptor,
+                            this.jsonProcessor,
                             cancellationToken);
+
+                    CosmosDiagnostics decorated = new EncryptionFeedDiagnostics(
+                        responseMessage.Diagnostics,
+                        this.jsonProcessor == JsonProcessor.Stream ? "Stream" : "Legacy");
+                    return new DecryptedResponseMessage(responseMessage, decryptedContent, decorated);
 #else
                     decryptedContent = await EncryptionProcessor.DeserializeAndDecryptResponseAsync(
                         responseMessage.Content,
                         this.encryptor,
                         cancellationToken);
-#endif
-
                     return new DecryptedResponseMessage(responseMessage, decryptedContent);
+#endif
                 }
 
                 return responseMessage;

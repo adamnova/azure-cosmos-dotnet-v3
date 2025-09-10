@@ -11,15 +11,25 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
     internal sealed class DecryptedResponseMessage : ResponseMessage
     {
         private readonly ResponseMessage responseMessage;
+        private readonly CosmosDiagnostics overrideDiagnostics;
         private Stream decryptedContent;
         private bool isDisposed = false;
 
         public DecryptedResponseMessage(
             ResponseMessage responseMessage,
             Stream decryptedContent)
+            : this(responseMessage, decryptedContent, overrideDiagnostics: null)
+        {
+        }
+
+        internal DecryptedResponseMessage(
+            ResponseMessage responseMessage,
+            Stream decryptedContent,
+            CosmosDiagnostics overrideDiagnostics)
         {
             this.responseMessage = responseMessage;
             this.decryptedContent = decryptedContent;
+            this.overrideDiagnostics = overrideDiagnostics;
         }
 
         public override Stream Content
@@ -30,7 +40,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
         public override string ContinuationToken => this.responseMessage.ContinuationToken;
 
-        public override CosmosDiagnostics Diagnostics => this.responseMessage.Diagnostics;
+        public override CosmosDiagnostics Diagnostics => this.overrideDiagnostics ?? this.responseMessage.Diagnostics;
 
         public override string ErrorMessage => this.responseMessage.ErrorMessage;
 
@@ -47,12 +57,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             if (disposing && !this.isDisposed)
             {
                 this.isDisposed = true;
-                if (this.decryptedContent != null)
-                {
-                    this.decryptedContent.Dispose();
-                    this.decryptedContent = null;
-                }
-
+                this.decryptedContent?.Dispose();
+                this.decryptedContent = null;
                 this.responseMessage?.Dispose();
             }
         }
