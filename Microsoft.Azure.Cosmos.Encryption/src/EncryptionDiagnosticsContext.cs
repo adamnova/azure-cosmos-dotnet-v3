@@ -6,42 +6,46 @@ namespace Microsoft.Azure.Cosmos.Encryption
 {
     using System;
     using System.Diagnostics;
-    using Newtonsoft.Json.Linq;
+    using System.Text.Json;
 
     internal sealed class EncryptionDiagnosticsContext
     {
         private DateTime startTime;
-        private Stopwatch stopwatch;
+    private ValueStopwatch valueStopwatch;
         private bool isDecryptionOperation;
 
         public EncryptionDiagnosticsContext()
         {
-            this.EncryptContent = new JObject();
-            this.DecryptContent = new JObject();
             this.TotalProcessingDuration = TimeSpan.Zero;
+        }
+
+        // Internal light-weight representation of a diagnostics operation entry
+        internal sealed class OperationDiagnostics
+        {
+            public DateTime StartTimeUtc { get; init; }
+            public TimeSpan Duration { get; init; }
+            public int? PropertiesCount { get; init; }
         }
 
         // time taken for encryption + decryption
         public TimeSpan TotalProcessingDuration { get; private set; }
 
-        public JObject EncryptContent { get; }
+        internal OperationDiagnostics EncryptOperation { get; private set; }
 
-        public JObject DecryptContent { get; }
+        internal OperationDiagnostics DecryptOperation { get; private set; }
 
         public void Begin(string operation)
         {
-            this.stopwatch = Stopwatch.StartNew();
+            this.valueStopwatch = ValueStopwatch.StartNew();
             this.startTime = DateTime.UtcNow;
 
             switch (operation)
             {
                 case Constants.DiagnosticsEncryptOperation:
-                    this.EncryptContent.Add(Constants.DiagnosticsStartTime, this.startTime);
                     this.isDecryptionOperation = false;
                     break;
 
                 case Constants.DiagnosticsDecryptOperation:
-                    this.DecryptContent.Add(Constants.DiagnosticsStartTime, this.startTime);
                     this.isDecryptionOperation = true;
                     break;
 
@@ -53,26 +57,23 @@ namespace Microsoft.Azure.Cosmos.Encryption
 
         public void End(int? propertiesCount = null)
         {
-            this.stopwatch.Stop();
-            this.TotalProcessingDuration += this.stopwatch.Elapsed;
+            TimeSpan elapsed = this.valueStopwatch.GetElapsedTime();
+            this.TotalProcessingDuration += elapsed;
+
+            OperationDiagnostics op = new OperationDiagnostics
+            {
+                StartTimeUtc = this.startTime,
+                Duration = elapsed,
+                PropertiesCount = propertiesCount
+            };
 
             if (this.isDecryptionOperation)
             {
-                this.DecryptContent.Add(Constants.DiagnosticsDuration, this.stopwatch.Elapsed);
-
-                if (propertiesCount.HasValue)
-                {
-                    this.DecryptContent.Add(Constants.DiagnosticsPropertiesDecryptedCount, propertiesCount);
-                }
+                this.DecryptOperation = op;
             }
             else
             {
-                this.EncryptContent.Add(Constants.DiagnosticsDuration, this.stopwatch.Elapsed);
-
-                if (propertiesCount.HasValue)
-                {
-                    this.EncryptContent.Add(Constants.DiagnosticsPropertiesEncryptedCount, propertiesCount);
-                }
+                this.EncryptOperation = op;
             }
         }
 
@@ -81,11 +82,39 @@ namespace Microsoft.Azure.Cosmos.Encryption
         {
             EncryptionCosmosDiagnostics encryptionDiagnostics = new EncryptionCosmosDiagnostics(
                 responseMessage.Diagnostics,
-                this.EncryptContent,
-                this.DecryptContent,
+                this.EncryptOperation,
+                this.DecryptOperation,
                 this.TotalProcessingDuration);
 
             responseMessage.Diagnostics = encryptionDiagnostics;
+        }
+    }
+
+    // Lightweight value-type stopwatch to avoid allocating System.Diagnostics.Stopwatch.
+    internal struct ValueStopwatch
+    {
+        private readonly long startTimestamp;
+
+        private ValueStopwatch(long startTimestamp)
+        {
+            this.startTimestamp = startTimestamp;
+        }
+
+        public static ValueStopwatch StartNew() => new ValueStopwatch(Stopwatch.GetTimestamp());
+
+        public bool IsStarted => this.startTimestamp != 0;
+
+        public TimeSpan GetElapsedTime()
+        {
+            if (!this.IsStarted)
+            {
+                return TimeSpan.Zero;
+            }
+
+            long end = Stopwatch.GetTimestamp();
+            long delta = end - this.startTimestamp;
+            double seconds = (double)delta / Stopwatch.Frequency;
+            return TimeSpan.FromSeconds(seconds);
         }
     }
 }

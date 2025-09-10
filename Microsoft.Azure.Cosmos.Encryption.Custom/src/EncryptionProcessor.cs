@@ -48,7 +48,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             CancellationToken cancellationToken)
         {
             // diagnosticsContext may be null in some internal call sites, so guard before creating scopes.
-
             ValidateInputForEncrypt(
                 input,
                 encryptor,
