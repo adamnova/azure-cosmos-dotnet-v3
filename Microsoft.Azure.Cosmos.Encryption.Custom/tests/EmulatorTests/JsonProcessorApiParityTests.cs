@@ -325,32 +325,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             await ValidateRawEncryptedAsync(d2);
         }
 
-        [TestMethod]
-        public async Task ChangeFeedIterator_Parity()
-        {
-            string pk = "cfParity";
-            Doc legacy = NewDoc(pk, "legacyCF", "p1");
-            Doc streamDoc = NewDoc(pk, "streamCF", "p2");
-            await encContainer.CreateItemAsync(legacy, new PartitionKey(pk), new EncryptionItemRequestOptions { EncryptionOptions = Options(JsonProcessor.Newtonsoft) });
-            await encContainer.CreateItemAsync(streamDoc, new PartitionKey(pk), new EncryptionItemRequestOptions { EncryptionOptions = Options(JsonProcessor.Stream) });
-            await ValidateRawEncryptedAsync(legacy);
-            await ValidateRawEncryptedAsync(streamDoc);
-
-            // Legacy iterator (default newtonsoft)
-            FeedIterator<Doc> legacyIterator = encContainer.GetChangeFeedIterator<Doc>(ChangeFeedStartFrom.Beginning(), ChangeFeedMode.Incremental);
-
-            // Streaming iterator via wrapper
-            ChangeFeedRequestOptions streamOptions = new();
-            new EncryptionChangeFeedJsonProcessorOptions { JsonProcessor = JsonProcessor.Stream }.Apply(streamOptions);
-            FeedIterator<Doc> streamIterator = encContainer.GetChangeFeedIterator<Doc>(ChangeFeedStartFrom.Beginning(), ChangeFeedMode.Incremental, streamOptions);
-
-            List<string> legacySecrets = await DrainChangeFeedAsync(legacyIterator, pk, expectedMin: 2);
-            List<string> streamSecrets = await DrainChangeFeedAsync(streamIterator, pk, expectedMin: 2);
-
-            CollectionAssert.IsSubsetOf(new[] { legacy.Secret, streamDoc.Secret }, legacySecrets);
-            CollectionAssert.IsSubsetOf(new[] { legacy.Secret, streamDoc.Secret }, streamSecrets);
-        }
-
         private static async Task ValidateRawEncryptedAsync(Doc original)
         {
             // Read the stored document through the raw (non-encrypting) container to ensure the encrypted field is not in plaintext

@@ -40,22 +40,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
 #endif
         }
 
-        [TestMethod]
-        public void ChangeFeedJsonProcessorOptions_Apply_TryGet_Roundtrip()
-        {
-            ChangeFeedRequestOptions baseOptions = new();
-            EncryptionChangeFeedJsonProcessorOptions wrapper = new();
-            Assert.AreEqual(JsonProcessor.Newtonsoft, wrapper.JsonProcessor);
-
-#if ENCRYPTION_CUSTOM_PREVIEW && NET8_0_OR_GREATER
-            wrapper.JsonProcessor = JsonProcessor.Stream;
-#endif
-
-            wrapper.Apply(baseOptions);
-            bool found = EncryptionChangeFeedJsonProcessorOptions.TryGet(baseOptions, out JsonProcessor selected);
-            Assert.IsTrue(found, "Expected to retrieve applied JsonProcessor from ChangeFeedRequestOptions.Properties.");
-            Assert.AreEqual(wrapper.JsonProcessor, selected);
-        }
 
         [TestMethod]
         public void EncryptionFeedIterator_InternalField_Assigned()

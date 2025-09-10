@@ -5,11 +5,9 @@
 namespace Microsoft.Azure.Cosmos.Encryption
 {
     using System;
-    using System.Buffers;
     using System.Collections.Generic;
-    using System.IO;
     using System.Text;
-    using System.Text.Json;
+    using System.Text.Encodings.Web;
 
     internal sealed class EncryptionCosmosDiagnostics : CosmosDiagnostics
     {
@@ -19,10 +17,10 @@ namespace Microsoft.Azure.Cosmos.Encryption
         private readonly TimeSpan processingDuration;
 
         public EncryptionCosmosDiagnostics(
-                CosmosDiagnostics coreDiagnostics,
-                EncryptionDiagnosticsContext.OperationDiagnostics encryptOperation,
-                EncryptionDiagnosticsContext.OperationDiagnostics decryptOperation,
-                TimeSpan processingDuration)
+            CosmosDiagnostics coreDiagnostics,
+            EncryptionDiagnosticsContext.OperationDiagnostics encryptOperation,
+            EncryptionDiagnosticsContext.OperationDiagnostics decryptOperation,
+            TimeSpan processingDuration)
         {
             this.coreDiagnostics = coreDiagnostics ?? throw new ArgumentNullException(nameof(coreDiagnostics));
             this.encryptOperation = encryptOperation;
@@ -45,190 +43,123 @@ namespace Microsoft.Azure.Cosmos.Encryption
 
         public override string ToString()
         {
-            string core = this.coreDiagnostics.ToString();
-            int estimatedCapacity = EstimateInitialCapacity(core?.Length ?? 0, this.encryptOperation, this.decryptOperation);
+            string core = this.coreDiagnostics.ToString() ?? string.Empty;
+            bool coreIsJson = LooksLikeJson(core);
 
-            PooledArrayBufferWriter bufferWriter = new PooledArrayBufferWriter(estimatedCapacity);
-            try
+            int capacity = core.Length + 320;
+            if (this.encryptOperation.HasValue)
             {
-                using (Utf8JsonWriter writer = new Utf8JsonWriter(bufferWriter))
+                capacity += 100;
+            }
+
+            if (this.decryptOperation.HasValue)
+            {
+                capacity += 100;
+            }
+
+            StringBuilder sb = new StringBuilder(capacity);
+            sb.Append('{');
+            AppendPropertyName(sb, Constants.DiagnosticsCoreDiagnostics);
+            if (coreIsJson)
+            {
+                sb.Append(core);
+            }
+            else
+            {
+                AppendEscapedString(sb, core);
+            }
+
+            sb.Append(',');
+            AppendPropertyName(sb, Constants.DiagnosticsEncryptionDiagnostics);
+            sb.Append('{');
+
+            bool needComma = false;
+            if (this.encryptOperation.HasValue)
+            {
+                AppendOperation(
+                    sb,
+                    Constants.DiagnosticsEncryptOperation,
+                    this.encryptOperation.StartTimeUtc,
+                    this.encryptOperation.Duration,
+                    this.encryptOperation.HasPropertiesCount,
+                    this.encryptOperation.PropertiesCount,
+                    Constants.DiagnosticsPropertiesEncryptedCount);
+                needComma = true;
+            }
+
+            if (this.decryptOperation.HasValue)
+            {
+                if (needComma)
                 {
-                    writer.WriteStartObject();
-
-                    // Core diagnostics
-                    writer.WritePropertyName(Constants.DiagnosticsCoreDiagnostics);
-                    bool wroteCore = false;
-                    if (!string.IsNullOrEmpty(core))
-                    {
-                        try
-                        {
-                            using JsonDocument doc = JsonDocument.Parse(core);
-                            doc.RootElement.WriteTo(writer);
-                            wroteCore = true;
-                        }
-                        catch
-                        {
-                            // fall back below
-                        }
-                    }
-
-                    if (!wroteCore)
-                    {
-                        writer.WriteStringValue(core ?? string.Empty);
-                    }
-
-                    writer.WritePropertyName(Constants.DiagnosticsEncryptionDiagnostics);
-                    writer.WriteStartObject();
-
-                    if (this.encryptOperation.HasValue)
-                    {
-                        writer.WritePropertyName(Constants.DiagnosticsEncryptOperation);
-                        writer.WriteStartObject();
-                        writer.WriteString(Constants.DiagnosticsStartTime, this.encryptOperation.StartTimeUtc);
-                        writer.WriteString(Constants.DiagnosticsDuration, this.encryptOperation.Duration.ToString());
-                        if (this.encryptOperation.HasPropertiesCount)
-                        {
-                            writer.WriteNumber(Constants.DiagnosticsPropertiesEncryptedCount, this.encryptOperation.PropertiesCount);
-                        }
-
-                        writer.WriteEndObject();
-                    }
-
-                    if (this.decryptOperation.HasValue)
-                    {
-                        writer.WritePropertyName(Constants.DiagnosticsDecryptOperation);
-                        writer.WriteStartObject();
-                        writer.WriteString(Constants.DiagnosticsStartTime, this.decryptOperation.StartTimeUtc);
-                        writer.WriteString(Constants.DiagnosticsDuration, this.decryptOperation.Duration.ToString());
-                        if (this.decryptOperation.HasPropertiesCount)
-                        {
-                            writer.WriteNumber(Constants.DiagnosticsPropertiesDecryptedCount, this.decryptOperation.PropertiesCount);
-                        }
-
-                        writer.WriteEndObject();
-                    }
-
-                    writer.WriteEndObject(); // EncryptionDiagnostics
-                    writer.WriteEndObject(); // root
-                    writer.Flush();
+                    sb.Append(',');
                 }
 
-                byte[] bytes = bufferWriter.ToArray();
-                return Encoding.UTF8.GetString(bytes, 0, bytes.Length);
+                AppendOperation(
+                    sb,
+                    Constants.DiagnosticsDecryptOperation,
+                    this.decryptOperation.StartTimeUtc,
+                    this.decryptOperation.Duration,
+                    this.decryptOperation.HasPropertiesCount,
+                    this.decryptOperation.PropertiesCount,
+                    Constants.DiagnosticsPropertiesDecryptedCount);
             }
-            finally
-            {
-                bufferWriter.Dispose();
-            }
+
+            sb.Append('}'); // EncryptionDiagnostics
+            sb.Append('}'); // root
+            return sb.ToString();
         }
 
-        // Rough estimation of required capacity:
-        // Base JSON punctuation + property names (~120 bytes) + core diagnostics length
-        // Each operation block (Encrypt/Decrypt) adds ~160-220 bytes depending on presence of counts.
-        private static int EstimateInitialCapacity(int coreLength, in EncryptionDiagnosticsContext.OperationDiagnostics encryptOp, in EncryptionDiagnosticsContext.OperationDiagnostics decryptOp)
+        private static void AppendOperation(
+            StringBuilder sb,
+            string opName,
+            DateTime start,
+            TimeSpan duration,
+            bool hasCount,
+            int count,
+            string countPropertyName)
         {
-            const int BaseOverhead = 128; // braces + field names
-            const int OperationOverheadNoCount = 170; // property name + object with start + duration
-            const int OperationOverheadWithCount = 200; // above + property count
-
-            int overhead = BaseOverhead;
-            if (encryptOp.HasValue)
+            AppendPropertyName(sb, opName);
+            sb.Append('{');
+            AppendPropertyName(sb, Constants.DiagnosticsStartTime);
+            AppendEscapedString(sb, start.ToString("O"));
+            sb.Append(',');
+            AppendPropertyName(sb, Constants.DiagnosticsDuration);
+            AppendEscapedString(sb, duration.ToString());
+            if (hasCount)
             {
-                overhead += encryptOp.HasPropertiesCount ? OperationOverheadWithCount : OperationOverheadNoCount;
+                sb.Append(',');
+                AppendPropertyName(sb, countPropertyName);
+                sb.Append(count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
-            if (decryptOp.HasValue)
-            {
-                overhead += decryptOp.HasPropertiesCount ? OperationOverheadWithCount : OperationOverheadNoCount;
-            }
-
-            long total = (long)coreLength + overhead;
-
-            // Clamp between sensible bounds to avoid huge single rents or very small buffers.
-            if (total < 512)
-            {
-                total = 512;
-            }
-            else if (total > 64 * 1024)
-            {
-                total = 64 * 1024; // cap at 64KB; larger cases will grow dynamically
-            }
-
-            return (int)total;
+            sb.Append('}');
         }
 
-        private sealed class PooledArrayBufferWriter : IBufferWriter<byte>, IDisposable
+        private static void AppendPropertyName(StringBuilder sb, string name)
         {
-            private const int MinGrow = 256;
-            private byte[] buffer;
+            sb.Append('"').Append(name).Append('"').Append(':');
+        }
 
-            internal PooledArrayBufferWriter(int initialCapacity)
+        private static void AppendEscapedString(StringBuilder sb, string value)
+        {
+            string encoded = JavaScriptEncoder.Default.Encode(value);
+            sb.Append('"').Append(encoded).Append('"');
+        }
+
+        private static bool LooksLikeJson(string s)
+        {
+            for (int i = 0; i < s.Length; i++)
             {
-                this.buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
-                this.Length = 0;
-            }
-
-            public int Length { get; private set; }
-
-            public void Advance(int count)
-            {
-                this.Length += count;
-            }
-
-            public Memory<byte> GetMemory(int sizeHint = 0)
-            {
-                this.Ensure(sizeHint);
-                return new Memory<byte>(this.buffer, this.Length, this.buffer.Length - this.Length);
-            }
-
-            public Span<byte> GetSpan(int sizeHint = 0)
-            {
-                this.Ensure(sizeHint);
-                return new Span<byte>(this.buffer, this.Length, this.buffer.Length - this.Length);
-            }
-
-            public byte[] ToArray()
-            {
-                byte[] result = new byte[this.Length];
-                Buffer.BlockCopy(this.buffer, 0, result, 0, this.Length);
-                return result;
-            }
-
-            public void Dispose()
-            {
-                byte[] toReturn = this.buffer;
-                this.buffer = Array.Empty<byte>();
-                if (toReturn.Length > 0)
+                char c = s[i];
+                if (char.IsWhiteSpace(c))
                 {
-                    ArrayPool<byte>.Shared.Return(toReturn, clearArray: false);
-                }
-            }
-
-            private void Ensure(int sizeHint)
-            {
-                if (sizeHint < 0)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(sizeHint));
+                    continue;
                 }
 
-                if (sizeHint == 0)
-                {
-                    sizeHint = 1;
-                }
-
-                int remaining = this.buffer.Length - this.Length;
-                if (remaining >= sizeHint)
-                {
-                    return;
-                }
-
-                int growBy = Math.Max(sizeHint, Math.Max(this.buffer.Length / 2, MinGrow));
-                int newSize = checked(this.buffer.Length + growBy);
-                byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
-                Buffer.BlockCopy(this.buffer, 0, newBuffer, 0, this.Length);
-                ArrayPool<byte>.Shared.Return(this.buffer, clearArray: false);
-                this.buffer = newBuffer;
+                return c == '{' || c == '[';
             }
+
+            return false; // empty treated as string
         }
 
 #if SDKPROJECTREF
@@ -242,6 +173,5 @@ namespace Microsoft.Azure.Cosmos.Encryption
             return this.coreDiagnostics.GetFailedRequestCount();
         }
 #endif
-
     }
 }

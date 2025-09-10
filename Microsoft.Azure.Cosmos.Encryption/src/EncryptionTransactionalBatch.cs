@@ -237,8 +237,8 @@ namespace Microsoft.Azure.Cosmos.Encryption
                 EncryptionDiagnosticsContext encryptionDiagnosticsContext = new EncryptionDiagnosticsContext();
                 EncryptionCosmosDiagnostics encryptionDiagnostics = new EncryptionCosmosDiagnostics(
                     response.Diagnostics,
-                    encryptionDiagnosticsContext.EncryptContent,
-                    encryptionDiagnosticsContext.DecryptContent,
+                    encryptionDiagnosticsContext.EncryptOperation,
+                    encryptionDiagnosticsContext.DecryptOperation,
                     encryptionDiagnosticsContext.TotalProcessingDuration);
 
                 throw new EncryptionCosmosException(
@@ -337,8 +337,8 @@ namespace Microsoft.Azure.Cosmos.Encryption
             this.encryptionDiagnosticsContext.End();
             EncryptionCosmosDiagnostics encryptionDiagnostics = new EncryptionCosmosDiagnostics(
                 response.Diagnostics,
-                encryptContent: this.encryptionDiagnosticsContext.EncryptContent,
-                decryptContent: this.encryptionDiagnosticsContext.DecryptContent,
+                this.encryptionDiagnosticsContext.EncryptOperation,
+                this.encryptionDiagnosticsContext.DecryptOperation,
                 this.encryptionDiagnosticsContext.TotalProcessingDuration);
 
             return new EncryptionTransactionalBatchResponse(

@@ -988,17 +988,11 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             ChangeFeedMode changeFeedMode,
             ChangeFeedRequestOptions changeFeedRequestOptions = null)
         {
-            JsonProcessor jsonProcessor = JsonProcessor.Newtonsoft;
-            if (EncryptionChangeFeedJsonProcessorOptions.TryGet(changeFeedRequestOptions, out JsonProcessor selected))
-            {
-                jsonProcessor = selected;
-            }
-
             return new EncryptionFeedIterator(
                 this.container.GetChangeFeedStreamIterator(changeFeedStartFrom, changeFeedMode, changeFeedRequestOptions),
                 this.Encryptor,
                 this.CosmosSerializer,
-                jsonProcessor);
+                jsonProcessor: JsonProcessor.Newtonsoft);
         }
 
         public override FeedIterator<T> GetChangeFeedIterator<T>(
