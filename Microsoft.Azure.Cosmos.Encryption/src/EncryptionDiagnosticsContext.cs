@@ -11,7 +11,7 @@ namespace Microsoft.Azure.Cosmos.Encryption
     internal sealed class EncryptionDiagnosticsContext
     {
         private DateTime startTime;
-    private ValueStopwatch valueStopwatch;
+        private ValueStopwatch valueStopwatch;
         private bool isDecryptionOperation;
 
         public EncryptionDiagnosticsContext()
@@ -19,15 +19,6 @@ namespace Microsoft.Azure.Cosmos.Encryption
             this.TotalProcessingDuration = TimeSpan.Zero;
         }
 
-        // Internal light-weight representation of a diagnostics operation entry
-        internal sealed class OperationDiagnostics
-        {
-            public DateTime StartTimeUtc { get; init; }
-            public TimeSpan Duration { get; init; }
-            public int? PropertiesCount { get; init; }
-        }
-
-        // time taken for encryption + decryption
         public TimeSpan TotalProcessingDuration { get; private set; }
 
         internal OperationDiagnostics EncryptOperation { get; private set; }
@@ -39,20 +30,13 @@ namespace Microsoft.Azure.Cosmos.Encryption
             this.valueStopwatch = ValueStopwatch.StartNew();
             this.startTime = DateTime.UtcNow;
 
-            switch (operation)
+            this.isDecryptionOperation = operation switch
             {
-                case Constants.DiagnosticsEncryptOperation:
-                    this.isDecryptionOperation = false;
-                    break;
-
-                case Constants.DiagnosticsDecryptOperation:
-                    this.isDecryptionOperation = true;
-                    break;
-
-                default:
-                    throw new NotSupportedException($"Operation: {operation} is not supported. " +
-                        $"Should be either {Constants.DiagnosticsEncryptOperation} or {Constants.DiagnosticsDecryptOperation}.");
-            }
+                Constants.DiagnosticsEncryptOperation => false,
+                Constants.DiagnosticsDecryptOperation => true,
+                _ => throw new NotSupportedException($"Operation: {operation} is not supported. " +
+                                        $"Should be either {Constants.DiagnosticsEncryptOperation} or {Constants.DiagnosticsDecryptOperation}."),
+            };
         }
 
         public void End(int? propertiesCount = null)
@@ -62,10 +46,15 @@ namespace Microsoft.Azure.Cosmos.Encryption
 
             OperationDiagnostics op = new OperationDiagnostics
             {
+                HasValue = true,
                 StartTimeUtc = this.startTime,
                 Duration = elapsed,
-                PropertiesCount = propertiesCount
             };
+            if (propertiesCount.HasValue)
+            {
+                op.PropertiesCount = propertiesCount.Value;
+                op.HasPropertiesCount = true;
+            }
 
             if (this.isDecryptionOperation)
             {
@@ -88,33 +77,14 @@ namespace Microsoft.Azure.Cosmos.Encryption
 
             responseMessage.Diagnostics = encryptionDiagnostics;
         }
-    }
 
-    // Lightweight value-type stopwatch to avoid allocating System.Diagnostics.Stopwatch.
-    internal struct ValueStopwatch
-    {
-        private readonly long startTimestamp;
-
-        private ValueStopwatch(long startTimestamp)
+        internal struct OperationDiagnostics
         {
-            this.startTimestamp = startTimestamp;
-        }
-
-        public static ValueStopwatch StartNew() => new ValueStopwatch(Stopwatch.GetTimestamp());
-
-        public bool IsStarted => this.startTimestamp != 0;
-
-        public TimeSpan GetElapsedTime()
-        {
-            if (!this.IsStarted)
-            {
-                return TimeSpan.Zero;
-            }
-
-            long end = Stopwatch.GetTimestamp();
-            long delta = end - this.startTimestamp;
-            double seconds = (double)delta / Stopwatch.Frequency;
-            return TimeSpan.FromSeconds(seconds);
+            public bool HasValue;
+            public bool HasPropertiesCount;
+            public DateTime StartTimeUtc;
+            public TimeSpan Duration;
+            public int PropertiesCount;
         }
     }
 }
