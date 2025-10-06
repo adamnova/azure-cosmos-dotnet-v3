@@ -175,6 +175,8 @@ jobs:
             --no-restore
       
       - name: Run compatibility tests
+        id: run-tests
+        continue-on-error: true
         run: |
           dotnet test Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
             --configuration Release \
@@ -184,13 +186,64 @@ jobs:
             --logger "console;verbosity=normal" \
             --results-directory ./TestResults
       
-      - name: Upload test results
+      - name: Upload test results (TRX)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-trx
           path: ./TestResults/*.trx
           retention-days: 30
+      
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Compatibility Test Results
+          path: './TestResults/*.trx'
+          reporter: dotnet-trx
+          fail-on-error: true
+          fail-on-empty: true
+      
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## 🧪 Compatibility Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package Version:** \`${{ needs.build-current-package.outputs.package_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "./TestResults/compatibility-results.trx" ]; then
+            # Parse TRX file for summary (basic parsing)
+            TOTAL=$(grep -oP '(?<=total=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
+            PASSED=$(grep -oP '(?<=passed=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
+            FAILED=$(grep -oP '(?<=failed=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
+            
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$FAILED" == "0" ]; then
+              echo "### ✅ All compatibility tests passed!" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ❌ Some compatibility tests failed" >> $GITHUB_STEP_SUMMARY
+              echo "Check the detailed test report above for failure details." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ Test results file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Tested Package:** \`Microsoft.Azure.Cosmos.Encryption.Custom.${{ needs.build-current-package.outputs.package_version }}.nupkg\`" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Fail workflow if tests failed
+        if: steps.run-tests.outcome == 'failure'
+        run: |
+          echo "❌ Compatibility tests failed"
+          exit 1
       
       - name: Display test summary
         if: always()
@@ -201,5 +254,10 @@ jobs:
           echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
           echo "Test completed. Check test results artifact for details."
           echo "========================================="
-          echo "✅ Full matrix compatibility test complete"
+          
+          if [ "${{ steps.run-tests.outcome }}" == "success" ]; then
+            echo "✅ Full matrix compatibility test complete"
+          else
+            echo "❌ Compatibility test failures detected"
+          fi
           echo "========================================="
