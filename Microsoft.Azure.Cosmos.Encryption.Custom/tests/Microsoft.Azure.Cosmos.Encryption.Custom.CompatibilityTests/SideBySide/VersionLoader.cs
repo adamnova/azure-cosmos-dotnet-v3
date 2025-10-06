@@ -80,37 +80,34 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
 
         private static string GetPackagePath(string version)
         {
-            // For "current" versions (e.g., "1.0.0-current-*"), check local packages first
-            if (version.Contains("current", StringComparison.OrdinalIgnoreCase))
+            // First, always check local packages folder (for CI-built or locally-built packages)
+            string localPackagesPath = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/local-packages"));
+            
+            if (Directory.Exists(localPackagesPath))
             {
-                var localPackagesPath = Path.GetFullPath(
-                    Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/local-packages"));
-                
-                if (Directory.Exists(localPackagesPath))
+                // Look for exact version match in local packages
+                string[] packageFiles = Directory.GetFiles(localPackagesPath, $"Microsoft.Azure.Cosmos.Encryption.Custom.{version}.nupkg")
+                    .Where(f => !f.EndsWith(".symbols.nupkg"))
+                    .ToArray();
+
+                if (packageFiles.Length > 0)
                 {
-                    // Extract the version from NuGet package in local folder
-                    var packageFiles = Directory.GetFiles(localPackagesPath, $"Microsoft.Azure.Cosmos.Encryption.Custom.{version}.nupkg")
-                        .Where(f => !f.EndsWith(".symbols.nupkg"))
-                        .ToArray();
-
-                    if (packageFiles.Length > 0)
+                    // Extract the package to a temp location for loading
+                    string packageFile = packageFiles[0];
+                    string extractPath = Path.Combine(Path.GetTempPath(), "cosmos-compat-tests", Path.GetFileNameWithoutExtension(packageFile));
+                    
+                    if (!Directory.Exists(extractPath) || !File.Exists(Path.Combine(extractPath, "lib", "netstandard2.0", "Microsoft.Azure.Cosmos.Encryption.Custom.dll")))
                     {
-                        // Extract the package to a temp location for loading
-                        var packageFile = packageFiles[0];
-                        var extractPath = Path.Combine(Path.GetTempPath(), "cosmos-compat-tests", Path.GetFileNameWithoutExtension(packageFile));
-                        
-                        if (!Directory.Exists(extractPath) || !File.Exists(Path.Combine(extractPath, "lib", "netstandard2.0", "Microsoft.Azure.Cosmos.Encryption.Custom.dll")))
-                        {
-                            Directory.CreateDirectory(extractPath);
-                            System.IO.Compression.ZipFile.ExtractToDirectory(packageFile, extractPath, overwriteFiles: true);
-                        }
-
-                        return extractPath;
+                        Directory.CreateDirectory(extractPath);
+                        System.IO.Compression.ZipFile.ExtractToDirectory(packageFile, extractPath, overwriteFiles: true);
                     }
+
+                    return extractPath;
                 }
             }
 
-            // Default: use global NuGet packages folder
+            // Fallback: use global NuGet packages folder
             string globalPackagesPath = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
             
             if (string.IsNullOrWhiteSpace(globalPackagesPath))
@@ -138,7 +135,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
             string libDir = Path.Combine(packagePath, "lib");
             if (Directory.Exists(libDir))
             {
-                var dllPath = Directory.GetFiles(libDir, "Microsoft.Azure.Cosmos.Encryption.Custom.dll", SearchOption.AllDirectories)
+                string dllPath = Directory.GetFiles(libDir, "Microsoft.Azure.Cosmos.Encryption.Custom.dll", SearchOption.AllDirectories)
                     .FirstOrDefault();
                 if (dllPath != null)
                 {
