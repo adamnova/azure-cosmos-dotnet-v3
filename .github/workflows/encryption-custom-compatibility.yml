@@ -23,10 +23,21 @@ on:
         description: 'Specific version to test (leave empty for baseline)'
         required: false
         type: string
+      version_matrix:
+        description: 'Comma-separated list of versions for full matrix (e.g., "1.0.0-preview07,1.0.0-preview06")'
+        required: false
+        type: string
+      baseline_version:
+        description: 'Override baseline version for quick check'
+        required: false
+        type: string
+        default: '1.0.0-preview07'
 
 env:
   BASELINE_VERSION: '1.0.0-preview07'
   DOTNET_VERSION: '8.0.x'
+  # Default version matrix (override via workflow_dispatch inputs)
+  DEFAULT_VERSION_MATRIX: '["1.0.0-preview07","1.0.0-preview06","1.0.0-preview05","1.0.0-preview04"]'
 
 jobs:
   # Quick check for PRs - only test baseline version
@@ -57,7 +68,7 @@ jobs:
           echo "========================================="
           echo "Compatibility Test Configuration"
           echo "========================================="
-          echo "Testing Against Version: ${{ github.event.inputs.test_version || env.BASELINE_VERSION }}"
+          echo "Testing Against Version: ${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}"
           echo "Runner: ${{ runner.os }}"
           echo "========================================="
       
@@ -70,7 +81,7 @@ jobs:
           dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
             --configuration Release \
             --no-restore \
-            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.test_version || env.BASELINE_VERSION }}
+            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}
       
       - name: Run compatibility tests
         run: |
@@ -78,10 +89,10 @@ jobs:
             --configuration Release \
             --no-build \
             --no-restore \
-            --logger "trx;LogFileName=compatibility-${{ github.event.inputs.test_version || env.BASELINE_VERSION }}.trx" \
+            --logger "trx;LogFileName=compatibility-${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}.trx" \
             --logger "console;verbosity=normal" \
             --results-directory ./TestResults \
-            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.test_version || env.BASELINE_VERSION }}
+            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}
       
       - name: Upload test results
         if: always()
@@ -100,19 +111,47 @@ jobs:
           dotnet list Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj package | grep -i cosmos || true
 
   # Full matrix test - runs on schedule or manual trigger
+  prepare-matrix:
+    name: Prepare Version Matrix
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    
+    steps:
+      - name: Set version matrix
+        id: set-matrix
+        run: |
+          if [ -n "${{ github.event.inputs.version_matrix }}" ]; then
+            # Convert comma-separated input to JSON array
+            IFS=',' read -ra VERSIONS <<< "${{ github.event.inputs.version_matrix }}"
+            MATRIX_JSON="["
+            for i in "${!VERSIONS[@]}"; do
+              VERSION=$(echo "${VERSIONS[$i]}" | xargs) # trim whitespace
+              if [ $i -gt 0 ]; then MATRIX_JSON+=","; fi
+              MATRIX_JSON+="\"$VERSION\""
+            done
+            MATRIX_JSON+="]"
+            echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+            echo "Using custom version matrix: $MATRIX_JSON"
+          else
+            # Use default matrix
+            echo "matrix=$DEFAULT_VERSION_MATRIX" >> $GITHUB_OUTPUT
+            echo "Using default version matrix: $DEFAULT_VERSION_MATRIX"
+          fi
+        env:
+          DEFAULT_VERSION_MATRIX: ${{ env.DEFAULT_VERSION_MATRIX }}
+
   full-matrix:
     name: Test v${{ matrix.version }}
+    needs: prepare-matrix
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
     
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - '1.0.0-preview07'
-          - '1.0.0-preview06'
-          - '1.0.0-preview05'
-          - '1.0.0-preview04'
+        version: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     
     steps:
       - name: Checkout code
