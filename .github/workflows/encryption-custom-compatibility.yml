@@ -50,6 +50,9 @@ jobs:
       - name: Build and pack current version
         id: build-pkg
         run: |
+          # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
+          mkdir -p artifacts/local-packages
+          
           # Generate unique version with PR/run number
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             VERSION_SUFFIX="pr${{ github.event.pull_request.number }}-${{ github.run_number }}"
