@@ -84,8 +84,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
             string localPackagesPath = Path.GetFullPath(
                 Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/local-packages"));
             
+            Console.WriteLine($"[VersionLoader] Looking for version {version}");
+            Console.WriteLine($"[VersionLoader] AppContext.BaseDirectory = {AppContext.BaseDirectory}");
+            Console.WriteLine($"[VersionLoader] Checking local path: {localPackagesPath}");
+            Console.WriteLine($"[VersionLoader] Local path exists: {Directory.Exists(localPackagesPath)}");
+            
             if (Directory.Exists(localPackagesPath))
             {
+                Console.WriteLine($"[VersionLoader] Local packages folder contents:");
+                foreach (string file in Directory.GetFiles(localPackagesPath, "*.nupkg"))
+                {
+                    Console.WriteLine($"[VersionLoader]   - {Path.GetFileName(file)}");
+                }
+                
                 // Look for exact version match in local packages
                 string[] packageFiles = Directory.GetFiles(localPackagesPath, $"Microsoft.Azure.Cosmos.Encryption.Custom.{version}.nupkg")
                     .Where(f => !f.EndsWith(".symbols.nupkg"))
@@ -93,6 +104,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
 
                 if (packageFiles.Length > 0)
                 {
+                    Console.WriteLine($"[VersionLoader] Found package in local folder: {packageFiles[0]}");
                     // Extract the package to a temp location for loading
                     string packageFile = packageFiles[0];
                     string extractPath = Path.Combine(Path.GetTempPath(), "cosmos-compat-tests", Path.GetFileNameWithoutExtension(packageFile));
@@ -105,9 +117,14 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
 
                     return extractPath;
                 }
+                else
+                {
+                    Console.WriteLine($"[VersionLoader] Package not found in local folder");
+                }
             }
 
             // Fallback: use global NuGet packages folder
+            Console.WriteLine($"[VersionLoader] Falling back to global NuGet cache");
             string globalPackagesPath = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
             
             if (string.IsNullOrWhiteSpace(globalPackagesPath))
@@ -115,6 +132,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
                 string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 globalPackagesPath = Path.Combine(userProfile, ".nuget", "packages");
             }
+            
+            Console.WriteLine($"[VersionLoader] Global NuGet path: {globalPackagesPath}");
 
             return Path.Combine(
                 globalPackagesPath,
