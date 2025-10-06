@@ -1,5 +1,26 @@
 # Compatibility Testing Pipeline for Microsoft.Azure.Cosmos.Encryption.Custom
 # Tests current build against published NuGet package versions to catch breaking changes
+#
+# Matrix Strategy:
+# ----------------
+# The pipeline uses a dynamic matrix to test against multiple package versions:
+# - PR/CI builds: Test only against BaselineVersion (latest preview)
+# - Scheduled/Manual runs: Test against all versions in VersionsToTest
+#
+# Adding New Versions:
+# --------------------
+# When a new preview or release version is published:
+# 1. Update 'BaselineVersion' to the latest version
+# 2. Add the new version to 'VersionsToTest' (comma-separated list)
+# 3. Optionally remove old versions if the matrix becomes too large
+#
+# Example:
+#   BaselineVersion: '1.0.0-preview08'
+#   VersionsToTest: '1.0.0-preview08,1.0.0-preview07,1.0.0-preview06'
+#
+# The matrix will automatically spawn parallel jobs for each version.
+#
+# For detailed documentation, see: docs/compatibility-testing/MATRIX-CONFIGURATION.md
 
 trigger:
   branches:
@@ -34,12 +55,13 @@ variables:
   BaselineVersion: '1.0.0-preview07'
   
   # Full version matrix for scheduled/manual runs
-  # Update this when new versions are published
-  VersionMatrix: |
-    1.0.0-preview07
-    1.0.0-preview06
-    1.0.0-preview05
-    1.0.0-preview04
+  # Update this list when new versions are published
+  # Format: comma-separated version list
+  ${{ if or(eq(variables['Build.Reason'], 'Schedule'), eq(variables['Build.Reason'], 'Manual')) }}:
+    VersionsToTest: '1.0.0-preview07,1.0.0-preview06,1.0.0-preview05,1.0.0-preview04'
+  ${{ else }}:
+    # For PR/CI builds, only test against latest
+    VersionsToTest: '1.0.0-preview07'
 
 stages:
   # Stage 0: API Compatibility Check (fast fail on breaking changes)
@@ -76,46 +98,21 @@ stages:
     dependsOn: ApiCompatibilityCheck
     condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
     jobs:
-      # Test against each version in parallel
-      - job: TestPreview07
-        displayName: 'Test vs 1.0.0-preview07'
+      # Dynamic matrix job - tests against all versions in parallel
+      - job: CompatibilityTest
+        displayName: 'Test vs $(TestVersion)'
         pool:
           vmImage: 'windows-latest'
+        strategy:
+          matrix:
+            ${{ each version in split(variables.VersionsToTest, ',') }}:
+              ${{ replace(version, '.', '_') }}:
+                TestVersion: ${{ version }}
         steps:
           - template: templates/encryption-custom-compatibility-test-steps.yml
             parameters:
               BuildConfiguration: $(BuildConfiguration)
-              TestVersion: '1.0.0-preview07'
-
-      - job: TestPreview06
-        displayName: 'Test vs 1.0.0-preview06'
-        pool:
-          vmImage: 'windows-latest'
-        steps:
-          - template: templates/encryption-custom-compatibility-test-steps.yml
-            parameters:
-              BuildConfiguration: $(BuildConfiguration)
-              TestVersion: '1.0.0-preview06'
-
-      - job: TestPreview05
-        displayName: 'Test vs 1.0.0-preview05'
-        pool:
-          vmImage: 'windows-latest'
-        steps:
-          - template: templates/encryption-custom-compatibility-test-steps.yml
-            parameters:
-              BuildConfiguration: $(BuildConfiguration)
-              TestVersion: '1.0.0-preview05'
-
-      - job: TestPreview04
-        displayName: 'Test vs 1.0.0-preview04'
-        pool:
-          vmImage: 'windows-latest'
-        steps:
-          - template: templates/encryption-custom-compatibility-test-steps.yml
-            parameters:
-              BuildConfiguration: $(BuildConfiguration)
-              TestVersion: '1.0.0-preview04'
+              TestVersion: $(TestVersion)
 
   # Stage 3: Summary and reporting
   - stage: Report
