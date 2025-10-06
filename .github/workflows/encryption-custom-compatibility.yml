@@ -1,0 +1,205 @@
+name: Encryption.Custom Compatibility Tests
+
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+    paths:
+      - 'Microsoft.Azure.Cosmos.Encryption.Custom/**'
+      - '.github/workflows/encryption-custom-compatibility.yml'
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'Microsoft.Azure.Cosmos.Encryption.Custom/**'
+  schedule:
+    # Run daily at 2:00 AM UTC for comprehensive version matrix
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_version:
+        description: 'Specific version to test (leave empty for baseline)'
+        required: false
+        type: string
+
+env:
+  BASELINE_VERSION: '1.0.0-preview07'
+  DOTNET_VERSION: '8.0.x'
+
+jobs:
+  # Quick check for PRs - only test baseline version
+  quick-check:
+    name: Quick Check (Baseline)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      
+      - name: Display test configuration
+        run: |
+          echo "========================================="
+          echo "Compatibility Test Configuration"
+          echo "========================================="
+          echo "Testing Against Version: ${{ github.event.inputs.test_version || env.BASELINE_VERSION }}"
+          echo "Runner: ${{ runner.os }}"
+          echo "========================================="
+      
+      - name: Restore dependencies
+        run: |
+          dotnet restore Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj
+      
+      - name: Build compatibility tests
+        run: |
+          dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.test_version || env.BASELINE_VERSION }}
+      
+      - name: Run compatibility tests
+        run: |
+          dotnet test Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-build \
+            --no-restore \
+            --logger "trx;LogFileName=compatibility-${{ github.event.inputs.test_version || env.BASELINE_VERSION }}.trx" \
+            --logger "console;verbosity=normal" \
+            --results-directory ./TestResults \
+            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.test_version || env.BASELINE_VERSION }}
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-baseline
+          path: ./TestResults/*.trx
+          retention-days: 30
+      
+      - name: Display package resolution
+        if: always()
+        run: |
+          echo "========================================="
+          echo "Package Resolution Details"
+          echo "========================================="
+          dotnet list Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj package | grep -i cosmos || true
+
+  # Full matrix test - runs on schedule or manual trigger
+  full-matrix:
+    name: Test v${{ matrix.version }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.0.0-preview07'
+          - '1.0.0-preview06'
+          - '1.0.0-preview05'
+          - '1.0.0-preview04'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ matrix.version }}-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-${{ matrix.version }}-
+            ${{ runner.os }}-nuget-
+      
+      - name: Display test configuration
+        run: |
+          echo "========================================="
+          echo "Compatibility Test Configuration"
+          echo "========================================="
+          echo "Testing Against Version: ${{ matrix.version }}"
+          echo "Runner: ${{ runner.os }}"
+          echo "========================================="
+      
+      - name: Restore dependencies
+        run: |
+          dotnet restore Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj
+      
+      - name: Build compatibility tests
+        run: |
+          dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:TargetEncryptionCustomVersion=${{ matrix.version }}
+      
+      - name: Run compatibility tests
+        run: |
+          dotnet test Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-build \
+            --no-restore \
+            --logger "trx;LogFileName=compatibility-${{ matrix.version }}.trx" \
+            --logger "console;verbosity=normal" \
+            --results-directory ./TestResults \
+            -p:TargetEncryptionCustomVersion=${{ matrix.version }}
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.version }}
+          path: ./TestResults/*.trx
+          retention-days: 30
+      
+      - name: Display package resolution
+        if: always()
+        run: |
+          echo "========================================="
+          echo "Package Resolution Details"
+          echo "========================================="
+          dotnet list Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj package | grep -i cosmos || true
+
+  # Summary job - aggregates results
+  test-summary:
+    name: Test Summary
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push')
+    needs: [full-matrix]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v4
+        with:
+          path: ./all-results
+      
+      - name: Display summary
+        run: |
+          echo "========================================="
+          echo "Compatibility Test Summary"
+          echo "========================================="
+          echo ""
+          echo "Test results downloaded to ./all-results/"
+          ls -R ./all-results/ || true
+          echo ""
+          echo "✅ Full matrix compatibility test complete"
+          echo "========================================="
