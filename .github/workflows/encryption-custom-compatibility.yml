@@ -55,6 +55,9 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       
+      - name: Create artifacts directory (prevent NuGet restore errors)
+        run: mkdir -p artifacts/local-packages
+      
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -161,6 +164,9 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Create artifacts directory (prevent NuGet restore errors)
+        run: mkdir -p artifacts/local-packages
       
       - name: Cache NuGet packages
         uses: actions/cache@v4
