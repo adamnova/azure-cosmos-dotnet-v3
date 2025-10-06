@@ -81,8 +81,11 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
         private static string GetPackagePath(string version)
         {
             // First, always check local packages folder (for CI-built or locally-built packages)
+            // From: .../tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/bin/Release/net8.0/
+            // To:   .../artifacts/local-packages
+            // Need to go up 6 levels: net8.0 -> Release -> bin -> CompatibilityTests -> tests -> Microsoft.Azure.Cosmos.Encryption.Custom -> repo root
             string localPackagesPath = Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/local-packages"));
+                Path.Combine(AppContext.BaseDirectory, "../../../../../../artifacts/local-packages"));
             
             Console.WriteLine($"[VersionLoader] Looking for version {version}");
             Console.WriteLine($"[VersionLoader] AppContext.BaseDirectory = {AppContext.BaseDirectory}");
