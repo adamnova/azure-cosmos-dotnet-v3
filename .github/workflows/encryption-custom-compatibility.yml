@@ -89,23 +89,19 @@ jobs:
           retention-days: 7
 
   # Run compatibility tests with version matrix
+  # Each matrix entry tests bidirectional compatibility between two versions
   compatibility-tests:
-    name: Test ${{ matrix.encrypt_version }} ⟷ ${{ matrix.decrypt_version }}
+    name: Test ${{ matrix.version1 }} ⟷ ${{ matrix.version2 }}
     needs: build-current-package
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Test current version against preview07
-          - encrypt_version: ${{ needs.build-current-package.outputs.package_version }}
-            decrypt_version: '1.0.0-preview07'
-            version_pair_name: 'current_to_preview07'
-          
-          # Test preview07 against current version
-          - encrypt_version: '1.0.0-preview07'
-            decrypt_version: ${{ needs.build-current-package.outputs.package_version }}
-            version_pair_name: 'preview07_to_current'
+          # Test current version against preview07 (bidirectional)
+          - version1: ${{ needs.build-current-package.outputs.package_version }}
+            version2: '1.0.0-preview07'
+            version_pair_name: 'current_vs_preview07'
     
     steps:
       - name: Checkout code
@@ -143,17 +139,17 @@ jobs:
       
       - name: Update test configuration
         run: |
-          ENCRYPT_VERSION="${{ matrix.encrypt_version }}"
-          DECRYPT_VERSION="${{ matrix.decrypt_version }}"
+          VERSION1="${{ matrix.version1 }}"
+          VERSION2="${{ matrix.version2 }}"
           
           # Create version array for this specific test pair
-          VERSIONS_JSON="[\"$ENCRYPT_VERSION\",\"$DECRYPT_VERSION\"]"
+          VERSIONS_JSON="[\"$VERSION1\",\"$VERSION2\"]"
           
           echo "========================================="
           echo "Test Pair Configuration"
           echo "========================================="
-          echo "Encrypt with: $ENCRYPT_VERSION"
-          echo "Decrypt with: $DECRYPT_VERSION"
+          echo "Version 1: $VERSION1"
+          echo "Version 2: $VERSION2"
           echo "Test versions: $VERSIONS_JSON"
           echo "========================================="
           
@@ -212,8 +208,8 @@ jobs:
         run: |
           echo "## 🧪 Compatibility Test Results: ${{ matrix.version_pair_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Encrypt Version:** \`${{ matrix.encrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Decrypt Version:** \`${{ matrix.decrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version 1:** \`${{ matrix.version1 }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version 2:** \`${{ matrix.version2 }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           TRX_FILE="./TestResults/compatibility-${{ matrix.version_pair_name }}.trx"
@@ -242,7 +238,7 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "📦 **Test Pair:** \`${{ matrix.encrypt_version }}\` ⟷ \`${{ matrix.decrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Test Pair:** \`${{ matrix.version1 }}\` ⟷ \`${{ matrix.version2 }}\`" >> $GITHUB_STEP_SUMMARY
       
       - name: Fail workflow if tests failed
         if: steps.run-tests.outcome == 'failure'
@@ -256,8 +252,8 @@ jobs:
           echo "========================================="
           echo "Compatibility Test Summary"
           echo "========================================="
-          echo "Encrypt Version: ${{ matrix.encrypt_version }}"
-          echo "Decrypt Version: ${{ matrix.decrypt_version }}"
+          echo "Version 1: ${{ matrix.version1 }}"
+          echo "Version 2: ${{ matrix.version2 }}"
           echo "Test Pair: ${{ matrix.version_pair_name }}"
           echo "========================================="
           
