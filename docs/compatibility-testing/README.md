@@ -32,38 +32,48 @@ dotnet test
 
 ### Configure Version Matrix in CI/CD
 
-The GitHub Actions workflow supports dynamic version matrix configuration without code changes.
+The GitHub Actions workflow automatically:
 
-#### Option 1: Manual Workflow Dispatch (UI)
+1. **Builds current source** as a NuGet package with unique version (e.g., `1.0.0-pr123-45` or `1.0.0-ci-789`)
+2. **Runs full matrix** testing current version against all published versions
+3. **No quick check mode** - always runs comprehensive matrix
+
+#### Manual Workflow Dispatch (UI)
 
 1. Go to **Actions** → **Encryption.Custom Compatibility Tests**
 2. Click **Run workflow**
-3. Fill in parameters:
-   - **baseline_version**: Override baseline (e.g., `1.0.0-preview08`)
+3. (Optional) Override version matrix:
    - **version_matrix**: Comma-separated versions (e.g., `1.0.0-preview08,1.0.0-preview07,1.0.0-preview06`)
 4. Click **Run workflow**
 
-#### Option 2: GitHub CLI
+The current source version will automatically be added to your specified matrix.
+
+#### GitHub CLI
 
 ```bash
-# Test custom baseline version
-gh workflow run encryption-custom-compatibility.yml \
-  -f baseline_version=1.0.0-preview08
+# Test against default matrix + current source
+gh workflow run encryption-custom-compatibility.yml
 
-# Test custom version matrix
+# Test against custom version matrix + current source
 gh workflow run encryption-custom-compatibility.yml \
   -f version_matrix="1.0.0-preview08,1.0.0-preview07,1.0.0-preview06"
-
-# Test both
-gh workflow run encryption-custom-compatibility.yml \
-  -f baseline_version=1.0.0-preview08 \
-  -f version_matrix="1.0.0-preview08,1.0.0-preview07,1.0.0-preview06,1.0.0-preview05"
 ```
+
+#### What Gets Tested
+
+**Every run tests**:
+
+- Current source code (built as `1.0.0-pr{number}-{run}` or `1.0.0-ci-{run}`)
+- Plus all versions in matrix (default or custom)
+
+**Example PR #42, run #100**:
+
+- Tests: `1.0.0-pr42-100`, `1.0.0-preview07`, `1.0.0-preview06`, `1.0.0-preview05`, `1.0.0-preview04`
 
 #### Default Behavior
 
-- **PR/Push**: Tests baseline version only (`1.0.0-preview07`)
-- **Scheduled/Manual** (no inputs): Tests default matrix: `["1.0.0-preview07","1.0.0-preview06","1.0.0-preview05","1.0.0-preview04"]`
+- **All triggers** (PR/push/schedule): Full matrix + current source
+- **Default matrix**: `["1.0.0-preview07","1.0.0-preview06","1.0.0-preview05","1.0.0-preview04"]`
 
 ### Update Default Versions
 

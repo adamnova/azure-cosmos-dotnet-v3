@@ -19,32 +19,24 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      test_version:
-        description: 'Specific version to test (leave empty for baseline)'
-        required: false
-        type: string
       version_matrix:
         description: 'Comma-separated list of versions for full matrix (e.g., "1.0.0-preview07,1.0.0-preview06")'
         required: false
         type: string
-      baseline_version:
-        description: 'Override baseline version for quick check'
-        required: false
-        type: string
-        default: '1.0.0-preview07'
 
 env:
-  BASELINE_VERSION: '1.0.0-preview07'
   DOTNET_VERSION: '8.0.x'
   # Default version matrix (override via workflow_dispatch inputs)
   DEFAULT_VERSION_MATRIX: '["1.0.0-preview07","1.0.0-preview06","1.0.0-preview05","1.0.0-preview04"]'
 
 jobs:
-  # Quick check for PRs - only test baseline version
-  quick-check:
-    name: Quick Check (Baseline)
-    if: github.event_name == 'pull_request'
+  # Build current source code as NuGet package
+  build-current-package:
+    name: Build Current Package
     runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.build-pkg.outputs.version }}
+      package_path: ${{ steps.build-pkg.outputs.path }}
     
     steps:
       - name: Checkout code
@@ -55,68 +47,49 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       
-      - name: Create artifacts directory (prevent NuGet restore errors)
-        run: mkdir -p artifacts/local-packages
-      
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-      
-      - name: Display test configuration
+      - name: Build and pack current version
+        id: build-pkg
         run: |
-          echo "========================================="
-          echo "Compatibility Test Configuration"
-          echo "========================================="
-          echo "Testing Against Version: ${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}"
-          echo "Runner: ${{ runner.os }}"
-          echo "========================================="
-      
-      - name: Restore dependencies
-        run: |
-          dotnet restore Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj
-      
-      - name: Build compatibility tests
-        run: |
-          dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+          # Generate unique version with PR/run number
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            VERSION_SUFFIX="pr${{ github.event.pull_request.number }}-${{ github.run_number }}"
+          else
+            VERSION_SUFFIX="ci-${{ github.run_number }}"
+          fi
+          
+          # Get base version from Directory.Build.props
+          BASE_VERSION=$(grep -oPm1 "(?<=<CustomEncryptionVersion>)[^<]+" Directory.Build.props)
+          PACKAGE_VERSION="${BASE_VERSION}-${VERSION_SUFFIX}"
+          
+          echo "Building package version: $PACKAGE_VERSION"
+          echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          
+          # Build and pack
+          dotnet pack Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj \
             --configuration Release \
-            --no-restore \
-            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}
+            -p:Version=$PACKAGE_VERSION \
+            -p:PackageVersion=$PACKAGE_VERSION \
+            --output ./packages
+          
+          PACKAGE_FILE="./packages/Microsoft.Azure.Cosmos.Encryption.Custom.${PACKAGE_VERSION}.nupkg"
+          echo "path=$PACKAGE_FILE" >> $GITHUB_OUTPUT
+          
+          echo "========================================="
+          echo "Built Package: $PACKAGE_FILE"
+          ls -lh ./packages/
+          echo "========================================="
       
-      - name: Run compatibility tests
-        run: |
-          dotnet test Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
-            --configuration Release \
-            --no-build \
-            --no-restore \
-            --logger "trx;LogFileName=compatibility-${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}.trx" \
-            --logger "console;verbosity=normal" \
-            --results-directory ./TestResults \
-            -p:TargetEncryptionCustomVersion=${{ github.event.inputs.baseline_version || '1.0.0-preview07' }}
-      
-      - name: Upload test results
-        if: always()
+      - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-baseline
-          path: ./TestResults/*.trx
-          retention-days: 30
-      
-      - name: Display package resolution
-        if: always()
-        run: |
-          echo "========================================="
-          echo "Package Resolution Details"
-          echo "========================================="
-          dotnet list Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj package | grep -i cosmos || true
+          name: current-package
+          path: ./packages/*.nupkg
+          retention-days: 7
 
   # Full matrix test - runs on schedule or manual trigger
   prepare-matrix:
     name: Prepare Version Matrix
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    needs: build-current-package
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -125,6 +98,8 @@ jobs:
       - name: Set version matrix
         id: set-matrix
         run: |
+          CURRENT_VERSION="${{ needs.build-current-package.outputs.package_version }}"
+          
           if [ -n "${{ github.event.inputs.version_matrix }}" ]; then
             # Convert comma-separated input to JSON array
             IFS=',' read -ra VERSIONS <<< "${{ github.event.inputs.version_matrix }}"
@@ -135,20 +110,22 @@ jobs:
               MATRIX_JSON+="\"$VERSION\""
             done
             MATRIX_JSON+="]"
-            echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
-            echo "Using custom version matrix: $MATRIX_JSON"
           else
             # Use default matrix
-            echo "matrix=$DEFAULT_VERSION_MATRIX" >> $GITHUB_OUTPUT
-            echo "Using default version matrix: $DEFAULT_VERSION_MATRIX"
+            MATRIX_JSON="${DEFAULT_VERSION_MATRIX}"
           fi
+          
+          # Add current version to the matrix
+          MATRIX_JSON="${MATRIX_JSON%]},\"${CURRENT_VERSION}\"]"
+          
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "Using version matrix: $MATRIX_JSON"
         env:
           DEFAULT_VERSION_MATRIX: ${{ env.DEFAULT_VERSION_MATRIX }}
 
   full-matrix:
     name: Test v${{ matrix.version }}
-    needs: prepare-matrix
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    needs: [build-current-package, prepare-matrix]
     runs-on: ubuntu-latest
     
     strategy:
@@ -165,9 +142,6 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       
-      - name: Create artifacts directory (prevent NuGet restore errors)
-        run: mkdir -p artifacts/local-packages
-      
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -183,8 +157,23 @@ jobs:
           echo "Compatibility Test Configuration"
           echo "========================================="
           echo "Testing Against Version: ${{ matrix.version }}"
+          echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
           echo "Runner: ${{ runner.os }}"
           echo "========================================="
+      
+      - name: Download current package
+        if: matrix.version == needs.build-current-package.outputs.package_version
+        uses: actions/download-artifact@v4
+        with:
+          name: current-package
+          path: ./local-packages
+      
+      - name: Setup local NuGet source
+        if: matrix.version == needs.build-current-package.outputs.package_version
+        run: |
+          dotnet nuget add source $(pwd)/local-packages --name LocalPackages
+          echo "Added local package source"
+          ls -lh ./local-packages/
       
       - name: Restore dependencies
         run: |
@@ -227,8 +216,8 @@ jobs:
   # Summary job - aggregates results
   test-summary:
     name: Test Summary
-    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push')
-    needs: [full-matrix]
+    if: always()
+    needs: [build-current-package, full-matrix]
     runs-on: ubuntu-latest
     
     steps:
@@ -242,6 +231,8 @@ jobs:
           echo "========================================="
           echo "Compatibility Test Summary"
           echo "========================================="
+          echo ""
+          echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
           echo ""
           echo "Test results downloaded to ./all-results/"
           ls -R ./all-results/ || true
