@@ -88,11 +88,24 @@ jobs:
           path: ./packages/*.nupkg
           retention-days: 7
 
-  # Run compatibility tests
+  # Run compatibility tests with version matrix
   compatibility-tests:
-    name: Compatibility Tests
+    name: Test ${{ matrix.encrypt_version }} ⟷ ${{ matrix.decrypt_version }}
     needs: build-current-package
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Test current version against preview07
+          - encrypt_version: ${{ needs.build-current-package.outputs.package_version }}
+            decrypt_version: '1.0.0-preview07'
+            version_pair_name: 'current_to_preview07'
+          
+          # Test preview07 against current version
+          - encrypt_version: '1.0.0-preview07'
+            decrypt_version: ${{ needs.build-current-package.outputs.package_version }}
+            version_pair_name: 'preview07_to_current'
     
     steps:
       - name: Checkout code
@@ -130,31 +143,21 @@ jobs:
       
       - name: Update test configuration
         run: |
-          CURRENT_VERSION="${{ needs.build-current-package.outputs.package_version }}"
+          ENCRYPT_VERSION="${{ matrix.encrypt_version }}"
+          DECRYPT_VERSION="${{ matrix.decrypt_version }}"
           
-          # Determine versions to test
-          if [ -n "${{ github.event.inputs.test_versions }}" ]; then
-            VERSIONS_INPUT="${{ github.event.inputs.test_versions }}"
-          else
-            VERSIONS_INPUT="1.0.0-preview07,current"
-          fi
+          # Create version array for this specific test pair
+          VERSIONS_JSON="[\"$ENCRYPT_VERSION\",\"$DECRYPT_VERSION\"]"
           
-          # Replace "current" with actual version
-          VERSIONS_INPUT=$(echo "$VERSIONS_INPUT" | sed "s/current/$CURRENT_VERSION/g")
-          
-          # Convert to JSON array
-          IFS=',' read -ra VERSION_ARRAY <<< "$VERSIONS_INPUT"
-          VERSIONS_JSON="["
-          for i in "${!VERSION_ARRAY[@]}"; do
-            VERSION=$(echo "${VERSION_ARRAY[$i]}" | xargs) # trim whitespace
-            if [ $i -gt 0 ]; then VERSIONS_JSON+=","; fi
-            VERSIONS_JSON+="\"$VERSION\""
-          done
-          VERSIONS_JSON+="]"
-          
+          echo "========================================="
+          echo "Test Pair Configuration"
+          echo "========================================="
+          echo "Encrypt with: $ENCRYPT_VERSION"
+          echo "Decrypt with: $DECRYPT_VERSION"
           echo "Test versions: $VERSIONS_JSON"
+          echo "========================================="
           
-          # Update testconfig.json
+          # Update testconfig.json with this specific version pair
           cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
           
           # Update the versions array in testconfig.json
@@ -182,7 +185,7 @@ jobs:
             --configuration Release \
             --no-build \
             --no-restore \
-            --logger "trx;LogFileName=compatibility-results.trx" \
+            --logger "trx;LogFileName=compatibility-${{ matrix.version_pair_name }}.trx" \
             --logger "console;verbosity=normal" \
             --results-directory ./TestResults
       
@@ -190,7 +193,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-trx
+          name: test-results-${{ matrix.version_pair_name }}
           path: ./TestResults/*.trx
           retention-days: 30
       
@@ -207,16 +210,18 @@ jobs:
       - name: Generate test summary
         if: always()
         run: |
-          echo "## 🧪 Compatibility Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Compatibility Test Results: ${{ matrix.version_pair_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Package Version:** \`${{ needs.build-current-package.outputs.package_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Encrypt Version:** \`${{ matrix.encrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Decrypt Version:** \`${{ matrix.decrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f "./TestResults/compatibility-results.trx" ]; then
+          TRX_FILE="./TestResults/compatibility-${{ matrix.version_pair_name }}.trx"
+          if [ -f "$TRX_FILE" ]; then
             # Parse TRX file for summary (basic parsing)
-            TOTAL=$(grep -oP '(?<=total=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
-            PASSED=$(grep -oP '(?<=passed=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
-            FAILED=$(grep -oP '(?<=failed=")[^"]+' ./TestResults/compatibility-results.trx | head -1)
+            TOTAL=$(grep -oP '(?<=total=")[^"]+' "$TRX_FILE" | head -1)
+            PASSED=$(grep -oP '(?<=passed=")[^"]+' "$TRX_FILE" | head -1)
+            FAILED=$(grep -oP '(?<=failed=")[^"]+' "$TRX_FILE" | head -1)
             
             echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -232,12 +237,12 @@ jobs:
               echo "Check the detailed test report above for failure details." >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "⚠️ Test results file not found" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Test results file not found: $TRX_FILE" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "📦 **Tested Package:** \`Microsoft.Azure.Cosmos.Encryption.Custom.${{ needs.build-current-package.outputs.package_version }}.nupkg\`" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Test Pair:** \`${{ matrix.encrypt_version }}\` ⟷ \`${{ matrix.decrypt_version }}\`" >> $GITHUB_STEP_SUMMARY
       
       - name: Fail workflow if tests failed
         if: steps.run-tests.outcome == 'failure'
@@ -251,13 +256,14 @@ jobs:
           echo "========================================="
           echo "Compatibility Test Summary"
           echo "========================================="
-          echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
-          echo "Test completed. Check test results artifact for details."
+          echo "Encrypt Version: ${{ matrix.encrypt_version }}"
+          echo "Decrypt Version: ${{ matrix.decrypt_version }}"
+          echo "Test Pair: ${{ matrix.version_pair_name }}"
           echo "========================================="
           
           if [ "${{ steps.run-tests.outcome }}" == "success" ]; then
-            echo "✅ Full matrix compatibility test complete"
+            echo "✅ Compatibility test passed for this version pair"
           else
-            echo "❌ Compatibility test failures detected"
+            echo "❌ Compatibility test failures detected for this version pair"
           fi
           echo "========================================="
