@@ -16,12 +16,14 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
 
         public Assembly Assembly { get; }
         public string Version { get; }
+        public string AssemblyPath { get; }
 
-        private VersionLoader(string version, Assembly assembly, IsolatedLoadContext context)
+        private VersionLoader(string version, Assembly assembly, IsolatedLoadContext context, string assemblyPath)
         {
             this.Version = version;
             this.Assembly = assembly;
             this.loadContext = context;
+            this.AssemblyPath = assemblyPath;
         }
 
         /// <summary>
@@ -51,10 +53,10 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
             }
 
             // Load in isolated context
-            var context = new IsolatedLoadContext(assemblyPath, $"CompatTest-{version}");
-            var assembly = context.LoadFromAssemblyPath(assemblyPath);
+            IsolatedLoadContext context = new IsolatedLoadContext(assemblyPath, $"CompatTest-{version}");
+            Assembly assembly = context.LoadFromAssemblyPath(assemblyPath);
 
-            return new VersionLoader(version, assembly, context);
+            return new VersionLoader(version, assembly, context, assemblyPath);
         }
 
         /// <summary>
