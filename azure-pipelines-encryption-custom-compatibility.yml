@@ -57,8 +57,9 @@ variables:
   BaselineVersion: '1.0.0-preview07'
 
 parameters:
-  # Full version matrix for scheduled/manual runs
-  # Update this list when new versions are published
+  # Version matrix configuration
+  # For PR builds: Test against a minimal set for fast feedback
+  # For other builds: Test against full matrix for comprehensive validation
   - name: VersionsToTest
     type: object
     default:
@@ -66,6 +67,13 @@ parameters:
       - '1.0.0-preview06'
       - '1.0.0-preview05'
       - '1.0.0-preview04'
+  
+  # Minimal set for PR builds (fast feedback) - at least 2 versions to validate matrix
+  - name: PRVersionsToTest
+    type: object
+    default:
+      - '1.0.0-preview07'
+      - '1.0.0-preview06'
 
 stages:
   # Stage 0: API Compatibility Check (fast fail on breaking changes)
@@ -83,48 +91,53 @@ stages:
               StrictMode: false
               BuildConfiguration: $(BuildConfiguration)
 
-  # Stage 1: Quick compatibility check against last published version
-  - stage: QuickCompatibilityCheck
-    displayName: 'Quick Check (Last Version)'
+  # Stage 1: Matrix compatibility testing
+  # PR builds: Test against minimal set (fast feedback)
+  # Other builds: Test against full matrix (comprehensive validation)
+  - stage: CompatibilityMatrix
+    displayName: 'Compatibility Matrix'
     dependsOn: ApiCompatibilityCheck
-    condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
-    jobs:
-      - template: templates/encryption-custom-compatibility-test.yml
-        parameters:
-          BuildConfiguration: $(BuildConfiguration)
-          TestVersion: $(BaselineVersion)
-          JobName: 'QuickCheck'
-          DisplayName: 'Test vs $(BaselineVersion)'
-
-  # Stage 2: Full matrix compatibility testing
-  - stage: FullMatrixCompatibility
-    displayName: 'Full Matrix Compatibility'
-    dependsOn: ApiCompatibilityCheck
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    condition: succeeded()
     jobs:
       # Dynamic matrix job - tests against all versions in parallel
-      - job: CompatibilityTest
-        displayName: 'Test vs $(TestVersion)'
-        pool:
-          vmImage: 'windows-latest'
-        strategy:
-          matrix:
-            ${{ each version in parameters.VersionsToTest }}:
-              ${{ replace(replace(version, '.', '_'), '-', '_') }}:
-                TestVersion: ${{ version }}
-        steps:
-          - template: templates/encryption-custom-compatibility-test-steps.yml
-            parameters:
-              BuildConfiguration: $(BuildConfiguration)
-              TestVersion: $(TestVersion)
+      ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
+        - job: CompatibilityTest
+          displayName: 'Test vs $(TestVersion)'
+          pool:
+            vmImage: 'windows-latest'
+          strategy:
+            matrix:
+              ${{ each version in parameters.PRVersionsToTest }}:
+                ${{ replace(replace(version, '.', '_'), '-', '_') }}:
+                  TestVersion: ${{ version }}
+          steps:
+            - template: templates/encryption-custom-compatibility-test-steps.yml
+              parameters:
+                BuildConfiguration: $(BuildConfiguration)
+                TestVersion: $(TestVersion)
+      
+      ${{ else }}:
+        - job: CompatibilityTest
+          displayName: 'Test vs $(TestVersion)'
+          pool:
+            vmImage: 'windows-latest'
+          strategy:
+            matrix:
+              ${{ each version in parameters.VersionsToTest }}:
+                ${{ replace(replace(version, '.', '_'), '-', '_') }}:
+                  TestVersion: ${{ version }}
+          steps:
+            - template: templates/encryption-custom-compatibility-test-steps.yml
+              parameters:
+                BuildConfiguration: $(BuildConfiguration)
+                TestVersion: $(TestVersion)
 
-  # Stage 3: Summary and reporting
+  # Stage 3: Summary and reporting  
   - stage: Report
     displayName: 'Compatibility Report'
     dependsOn:
       - ApiCompatibilityCheck
-      - QuickCompatibilityCheck
-      - FullMatrixCompatibility
+      - CompatibilityMatrix
     condition: succeededOrFailed()
     jobs:
       - job: PublishResults
