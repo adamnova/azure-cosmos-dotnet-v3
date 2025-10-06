@@ -80,50 +80,57 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
 
         private static string GetPackagePath(string version)
         {
-            // First, always check local packages folder (for CI-built or locally-built packages)
-            // From: .../tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/bin/Release/net8.0/
-            // To:   .../artifacts/local-packages
-            // Need to go up 6 levels: net8.0 -> Release -> bin -> CompatibilityTests -> tests -> Microsoft.Azure.Cosmos.Encryption.Custom -> repo root
-            string localPackagesPath = Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "../../../../../../artifacts/local-packages"));
-            
             Console.WriteLine($"[VersionLoader] Looking for version {version}");
             Console.WriteLine($"[VersionLoader] AppContext.BaseDirectory = {AppContext.BaseDirectory}");
-            Console.WriteLine($"[VersionLoader] Checking local path: {localPackagesPath}");
-            Console.WriteLine($"[VersionLoader] Local path exists: {Directory.Exists(localPackagesPath)}");
             
-            if (Directory.Exists(localPackagesPath))
+            // First, always check local packages folder (for CI-built or locally-built packages)
+            // Dynamically find repository root by crawling up looking for .git or .sln file
+            string repoRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+            
+            if (repoRoot != null)
             {
-                Console.WriteLine($"[VersionLoader] Local packages folder contents:");
-                foreach (string file in Directory.GetFiles(localPackagesPath, "*.nupkg"))
-                {
-                    Console.WriteLine($"[VersionLoader]   - {Path.GetFileName(file)}");
-                }
+                string localPackagesPath = Path.Combine(repoRoot, "artifacts", "local-packages");
+                Console.WriteLine($"[VersionLoader] Found repository root: {repoRoot}");
+                Console.WriteLine($"[VersionLoader] Checking local path: {localPackagesPath}");
+                Console.WriteLine($"[VersionLoader] Local path exists: {Directory.Exists(localPackagesPath)}");
                 
-                // Look for exact version match in local packages
-                string[] packageFiles = Directory.GetFiles(localPackagesPath, $"Microsoft.Azure.Cosmos.Encryption.Custom.{version}.nupkg")
-                    .Where(f => !f.EndsWith(".symbols.nupkg"))
-                    .ToArray();
-
-                if (packageFiles.Length > 0)
+                if (Directory.Exists(localPackagesPath))
                 {
-                    Console.WriteLine($"[VersionLoader] Found package in local folder: {packageFiles[0]}");
-                    // Extract the package to a temp location for loading
-                    string packageFile = packageFiles[0];
-                    string extractPath = Path.Combine(Path.GetTempPath(), "cosmos-compat-tests", Path.GetFileNameWithoutExtension(packageFile));
-                    
-                    if (!Directory.Exists(extractPath) || !File.Exists(Path.Combine(extractPath, "lib", "netstandard2.0", "Microsoft.Azure.Cosmos.Encryption.Custom.dll")))
+                    Console.WriteLine($"[VersionLoader] Local packages folder contents:");
+                    foreach (string file in Directory.GetFiles(localPackagesPath, "*.nupkg"))
                     {
-                        Directory.CreateDirectory(extractPath);
-                        System.IO.Compression.ZipFile.ExtractToDirectory(packageFile, extractPath, overwriteFiles: true);
+                        Console.WriteLine($"[VersionLoader]   - {Path.GetFileName(file)}");
                     }
+                    
+                    // Look for exact version match in local packages
+                    string[] packageFiles = Directory.GetFiles(localPackagesPath, $"Microsoft.Azure.Cosmos.Encryption.Custom.{version}.nupkg")
+                        .Where(f => !f.EndsWith(".symbols.nupkg"))
+                        .ToArray();
 
-                    return extractPath;
+                    if (packageFiles.Length > 0)
+                    {
+                        Console.WriteLine($"[VersionLoader] Found package in local folder: {packageFiles[0]}");
+                        // Extract the package to a temp location for loading
+                        string packageFile = packageFiles[0];
+                        string extractPath = Path.Combine(Path.GetTempPath(), "cosmos-compat-tests", Path.GetFileNameWithoutExtension(packageFile));
+                        
+                        if (!Directory.Exists(extractPath) || !File.Exists(Path.Combine(extractPath, "lib", "netstandard2.0", "Microsoft.Azure.Cosmos.Encryption.Custom.dll")))
+                        {
+                            Directory.CreateDirectory(extractPath);
+                            System.IO.Compression.ZipFile.ExtractToDirectory(packageFile, extractPath, overwriteFiles: true);
+                        }
+
+                        return extractPath;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[VersionLoader] Package not found in local folder");
+                    }
                 }
-                else
-                {
-                    Console.WriteLine($"[VersionLoader] Package not found in local folder");
-                }
+            }
+            else
+            {
+                Console.WriteLine($"[VersionLoader] Repository root not found, skipping local packages check");
             }
 
             // Fallback: use global NuGet packages folder
@@ -142,6 +149,35 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide
                 globalPackagesPath,
                 "microsoft.azure.cosmos.encryption.custom",
                 version.ToLowerInvariant());
+        }
+
+        /// <summary>
+        /// Crawls up the directory tree to find the repository root.
+        /// Looks for .git directory or .sln files as markers.
+        /// </summary>
+        private static string FindRepositoryRoot(string startPath)
+        {
+            DirectoryInfo current = new DirectoryInfo(startPath);
+            
+            while (current != null)
+            {
+                // Check for .git directory (most reliable indicator)
+                if (Directory.Exists(Path.Combine(current.FullName, ".git")))
+                {
+                    return current.FullName;
+                }
+                
+                // Check for .sln files (backup indicator)
+                if (current.GetFiles("*.sln").Length > 0)
+                {
+                    return current.FullName;
+                }
+                
+                // Move up one level
+                current = current.Parent;
+            }
+            
+            return null; // Repository root not found
         }
 
         private static string FindAssemblyPath(string packagePath)
