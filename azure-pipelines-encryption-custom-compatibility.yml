@@ -4,23 +4,25 @@
 # Matrix Strategy:
 # ----------------
 # The pipeline uses a dynamic matrix to test against multiple package versions:
-# - PR/CI builds: Test only against BaselineVersion (latest preview)
-# - Scheduled/Manual runs: Test against all versions in VersionsToTest
+# - PR/CI builds: Test only against BaselineVersion (latest preview) via QuickCheck stage
+# - Other builds: Test against all versions in parameters.VersionsToTest via FullMatrix stage
 #
 # Adding New Versions:
 # --------------------
 # When a new preview or release version is published:
-# 1. Update 'BaselineVersion' to the latest version
-# 2. Add the new version to 'VersionsToTest' (comma-separated list)
+# 1. Update 'BaselineVersion' variable to the latest version
+# 2. Add the new version to the 'VersionsToTest' parameter list (in parameters section)
 # 3. Optionally remove old versions if the matrix becomes too large
 #
-# Example:
-#   BaselineVersion: '1.0.0-preview08'
-#   VersionsToTest: '1.0.0-preview08,1.0.0-preview07,1.0.0-preview06'
+# Example in parameters section:
+#   - name: VersionsToTest
+#     type: object
+#     default:
+#       - '1.0.0-preview08'
+#       - '1.0.0-preview07'
+#       - '1.0.0-preview06'
 #
 # The matrix will automatically spawn parallel jobs for each version.
-#
-# For detailed documentation, see: docs/compatibility-testing/MATRIX-CONFIGURATION.md
 
 trigger:
   branches:
@@ -53,15 +55,17 @@ variables:
   
   # Baseline version (last published) for PR/CI builds
   BaselineVersion: '1.0.0-preview07'
-  
+
+parameters:
   # Full version matrix for scheduled/manual runs
   # Update this list when new versions are published
-  # Format: comma-separated version list
-  ${{ if or(eq(variables['Build.Reason'], 'Schedule'), eq(variables['Build.Reason'], 'Manual')) }}:
-    VersionsToTest: '1.0.0-preview07,1.0.0-preview06,1.0.0-preview05,1.0.0-preview04'
-  ${{ else }}:
-    # For PR/CI builds, only test against latest
-    VersionsToTest: '1.0.0-preview07'
+  - name: VersionsToTest
+    type: object
+    default:
+      - '1.0.0-preview07'
+      - '1.0.0-preview06'
+      - '1.0.0-preview05'
+      - '1.0.0-preview04'
 
 stages:
   # Stage 0: API Compatibility Check (fast fail on breaking changes)
@@ -105,8 +109,8 @@ stages:
           vmImage: 'windows-latest'
         strategy:
           matrix:
-            ${{ each version in split(variables.VersionsToTest, ',') }}:
-              ${{ replace(version, '.', '_') }}:
+            ${{ each version in parameters.VersionsToTest }}:
+              ${{ replace(replace(version, '.', '_'), '-', '_') }}:
                 TestVersion: ${{ version }}
         steps:
           - template: templates/encryption-custom-compatibility-test-steps.yml
