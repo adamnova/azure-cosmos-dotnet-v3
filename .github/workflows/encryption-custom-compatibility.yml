@@ -172,11 +172,16 @@ jobs:
           path: ./local-packages
       
       - name: Setup local NuGet source
-        if: matrix.version == needs.build-current-package.outputs.package_version
         run: |
-          dotnet nuget add source $(pwd)/local-packages --name LocalPackages
-          echo "Added local package source"
-          ls -lh ./local-packages/
+          # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
+          mkdir -p artifacts/local-packages
+          
+          # If testing current package, copy it to artifacts/local-packages
+          if [ "${{ matrix.version }}" == "${{ needs.build-current-package.outputs.package_version }}" ]; then
+            cp ./local-packages/*.nupkg artifacts/local-packages/
+            echo "Copied current package to artifacts/local-packages"
+            ls -lh artifacts/local-packages/
+          fi
       
       - name: Restore dependencies
         run: |
