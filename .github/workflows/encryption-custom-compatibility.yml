@@ -19,15 +19,14 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      version_matrix:
-        description: 'Comma-separated list of versions for full matrix (e.g., "1.0.0-preview07,1.0.0-preview06")'
+      test_versions:
+        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07,current"). Tests all pairs automatically.'
         required: false
+        default: '1.0.0-preview07,current'
         type: string
 
 env:
   DOTNET_VERSION: '8.0.x'
-  # Default version matrix (override via workflow_dispatch inputs)
-  DEFAULT_VERSION_MATRIX: '["1.0.0-preview07","1.0.0-preview06","1.0.0-preview05","1.0.0-preview04"]'
 
 jobs:
   # Build current source code as NuGet package
@@ -89,52 +88,11 @@ jobs:
           path: ./packages/*.nupkg
           retention-days: 7
 
-  # Full matrix test - runs on schedule or manual trigger
-  prepare-matrix:
-    name: Prepare Version Matrix
+  # Run compatibility tests
+  compatibility-tests:
+    name: Compatibility Tests
     needs: build-current-package
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    
-    steps:
-      - name: Set version matrix
-        id: set-matrix
-        run: |
-          CURRENT_VERSION="${{ needs.build-current-package.outputs.package_version }}"
-          
-          if [ -n "${{ github.event.inputs.version_matrix }}" ]; then
-            # Convert comma-separated input to JSON array
-            IFS=',' read -ra VERSIONS <<< "${{ github.event.inputs.version_matrix }}"
-            MATRIX_JSON="["
-            for i in "${!VERSIONS[@]}"; do
-              VERSION=$(echo "${VERSIONS[$i]}" | xargs) # trim whitespace
-              if [ $i -gt 0 ]; then MATRIX_JSON+=","; fi
-              MATRIX_JSON+="\"$VERSION\""
-            done
-            MATRIX_JSON+="]"
-          else
-            # Use default matrix
-            MATRIX_JSON="${DEFAULT_VERSION_MATRIX}"
-          fi
-          
-          # Add current version to the matrix
-          MATRIX_JSON="${MATRIX_JSON%]},\"${CURRENT_VERSION}\"]"
-          
-          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
-          echo "Using version matrix: $MATRIX_JSON"
-        env:
-          DEFAULT_VERSION_MATRIX: ${{ env.DEFAULT_VERSION_MATRIX }}
-
-  full-matrix:
-    name: Test v${{ matrix.version }}
-    needs: [build-current-package, prepare-matrix]
-    runs-on: ubuntu-latest
-    
-    strategy:
-      fail-fast: false
-      matrix:
-        version: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     
     steps:
       - name: Checkout code
@@ -149,34 +107,62 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ matrix.version }}-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
+          key: ${{ runner.os }}-nuget-compat-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-nuget-${{ matrix.version }}-
+            ${{ runner.os }}-nuget-compat-
             ${{ runner.os }}-nuget-
       
-      - name: Display test configuration
-        run: |
-          echo "========================================="
-          echo "Compatibility Test Configuration"
-          echo "========================================="
-          echo "Testing Against Version: ${{ matrix.version }}"
-          echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
-          echo "Runner: ${{ runner.os }}"
-          echo "========================================="
-      
       - name: Download current package
-        if: matrix.version == needs.build-current-package.outputs.package_version
         uses: actions/download-artifact@v4
         with:
           name: current-package
           path: ./local-packages
       
-      - name: Setup local NuGet source
-        if: matrix.version == needs.build-current-package.outputs.package_version
+      - name: Setup test environment
         run: |
-          dotnet nuget add source $(pwd)/local-packages --name LocalPackages
-          echo "Added local package source"
-          ls -lh ./local-packages/
+          # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
+          mkdir -p artifacts/local-packages
+          
+          # Copy current package to artifacts/local-packages
+          cp ./local-packages/*.nupkg artifacts/local-packages/
+          echo "Copied current package to artifacts/local-packages"
+          ls -lh artifacts/local-packages/
+      
+      - name: Update test configuration
+        run: |
+          CURRENT_VERSION="${{ needs.build-current-package.outputs.package_version }}"
+          
+          # Determine versions to test
+          if [ -n "${{ github.event.inputs.test_versions }}" ]; then
+            VERSIONS_INPUT="${{ github.event.inputs.test_versions }}"
+          else
+            VERSIONS_INPUT="1.0.0-preview07,current"
+          fi
+          
+          # Replace "current" with actual version
+          VERSIONS_INPUT=$(echo "$VERSIONS_INPUT" | sed "s/current/$CURRENT_VERSION/g")
+          
+          # Convert to JSON array
+          IFS=',' read -ra VERSION_ARRAY <<< "$VERSIONS_INPUT"
+          VERSIONS_JSON="["
+          for i in "${!VERSION_ARRAY[@]}"; do
+            VERSION=$(echo "${VERSION_ARRAY[$i]}" | xargs) # trim whitespace
+            if [ $i -gt 0 ]; then VERSIONS_JSON+=","; fi
+            VERSIONS_JSON+="\"$VERSION\""
+          done
+          VERSIONS_JSON+="]"
+          
+          echo "Test versions: $VERSIONS_JSON"
+          
+          # Update testconfig.json
+          cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
+          
+          # Update the versions array in testconfig.json
+          jq ".versionMatrix.versions = $VERSIONS_JSON" testconfig.json > testconfig.json.tmp
+          mv testconfig.json.tmp testconfig.json
+          
+          echo "Updated testconfig.json:"
+          cat testconfig.json
       
       - name: Restore dependencies
         run: |
@@ -186,8 +172,7 @@ jobs:
         run: |
           dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
             --configuration Release \
-            --no-restore \
-            -p:TargetEncryptionCustomVersion=${{ matrix.version }}
+            --no-restore
       
       - name: Run compatibility tests
         run: |
@@ -195,50 +180,26 @@ jobs:
             --configuration Release \
             --no-build \
             --no-restore \
-            --logger "trx;LogFileName=compatibility-${{ matrix.version }}.trx" \
+            --logger "trx;LogFileName=compatibility-results.trx" \
             --logger "console;verbosity=normal" \
-            --results-directory ./TestResults \
-            -p:TargetEncryptionCustomVersion=${{ matrix.version }}
+            --results-directory ./TestResults
       
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.version }}
+          name: test-results
           path: ./TestResults/*.trx
           retention-days: 30
       
-      - name: Display package resolution
+      - name: Display test summary
         if: always()
-        run: |
-          echo "========================================="
-          echo "Package Resolution Details"
-          echo "========================================="
-          dotnet list Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj package | grep -i cosmos || true
-
-  # Summary job - aggregates results
-  test-summary:
-    name: Test Summary
-    if: always()
-    needs: [build-current-package, full-matrix]
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Download all test results
-        uses: actions/download-artifact@v4
-        with:
-          path: ./all-results
-      
-      - name: Display summary
         run: |
           echo "========================================="
           echo "Compatibility Test Summary"
           echo "========================================="
-          echo ""
           echo "Current Package Version: ${{ needs.build-current-package.outputs.package_version }}"
-          echo ""
-          echo "Test results downloaded to ./all-results/"
-          ls -R ./all-results/ || true
-          echo ""
+          echo "Test completed. Check test results artifact for details."
+          echo "========================================="
           echo "✅ Full matrix compatibility test complete"
           echo "========================================="
