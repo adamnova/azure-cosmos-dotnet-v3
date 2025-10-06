@@ -118,11 +118,16 @@ jobs:
           name: current-package
           path: ./local-packages
       
+<<<<<<< HEAD
       - name: Setup test environment
+=======
+      - name: Setup local NuGet source
+>>>>>>> ee32e93d51c1dc719d990b42301338c3eea458f8
         run: |
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
           
+<<<<<<< HEAD
           # Copy current package to artifacts/local-packages
           cp ./local-packages/*.nupkg artifacts/local-packages/
           echo "Copied current package to artifacts/local-packages"
@@ -163,6 +168,14 @@ jobs:
           
           echo "Updated testconfig.json:"
           cat testconfig.json
+=======
+          # If testing current package, copy it to artifacts/local-packages
+          if [ "${{ matrix.version }}" == "${{ needs.build-current-package.outputs.package_version }}" ]; then
+            cp ./local-packages/*.nupkg artifacts/local-packages/
+            echo "Copied current package to artifacts/local-packages"
+            ls -lh artifacts/local-packages/
+          fi
+>>>>>>> ee32e93d51c1dc719d990b42301338c3eea458f8
       
       - name: Restore dependencies
         run: |

@@ -4,10 +4,9 @@
     "testMode": "compatibility"
   },
   "versionMatrix": {
-    "description": "All versions to test for cross-version encryption/decryption compatibility. Each version will be tested against every other version. Use 'current' to test the local source code.",
+    "description": "All versions to test for cross-version encryption/decryption compatibility. Each version will be tested against every other version. The CI workflow will update this file before running tests.",
     "versions": [
-      "1.0.0-preview07",
-      "1.0.0-preview08-next"
+      "1.0.0-preview07"
     ],
     "baseline": "1.0.0-preview07",
     "currentSourcePath": "../../../../../Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj",
