@@ -300,9 +300,25 @@ jobs:
       - name: Generate test summary
         if: always()
         run: |
-          echo "## 🧪 Compatibility Test Results: ${{ matrix.build_source.source_name }} vs ${{ matrix.test_version }}" >> $GITHUB_STEP_SUMMARY
+          # Generate source link
+          REPO="${{ matrix.build_source.repository }}"
+          REF="${{ matrix.build_source.ref }}"
+          SOURCE_NAME="${{ matrix.build_source.source_name }}"
+          
+          # Check if it's a PR reference (refs/pull/NUMBER/head)
+          if [[ "$REF" =~ ^refs/pull/([0-9]+)/head$ ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            SOURCE_LINK="[${SOURCE_NAME}](https://github.com/${REPO}/pull/${PR_NUMBER})"
+          else
+            # It's a branch
+            SOURCE_LINK="[${SOURCE_NAME}](https://github.com/${REPO}/tree/${REF})"
+          fi
+          
+          echo "## 🧪 Compatibility Test Results: ${SOURCE_LINK} ⟷ \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Built Source:** \`${{ matrix.build_source.source_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Built Source:** ${SOURCE_LINK}" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** \`${{ matrix.build_source.repository }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Ref:** \`${{ matrix.build_source.ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Test Version:** \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -310,6 +326,8 @@ jobs:
             echo "⚠️ **Status:** Tests skipped - package build failed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "This source could not be built successfully, likely due to API incompatibilities." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "👉 Check the build logs for details: ${SOURCE_LINK}" >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
           
