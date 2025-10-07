@@ -45,9 +45,15 @@ jobs:
       - name: Setup build matrix
         id: setup-matrix
         run: |
+          # Debug: Show trigger information
+          echo "Event name: ${{ github.event_name }}"
+          echo "Build sources input: '${{ github.event.inputs.build_sources }}'"
+          
           # Use custom build sources if provided, otherwise use defaults based on trigger
-          if [ -n "${{ github.event.inputs.build_sources }}" ]; then
-            BUILD_SOURCES='${{ github.event.inputs.build_sources }}'
+          BUILD_SOURCES_INPUT="${{ github.event.inputs.build_sources }}"
+          
+          if [ -n "$BUILD_SOURCES_INPUT" ] && [ "$BUILD_SOURCES_INPUT" != "" ]; then
+            BUILD_SOURCES="$BUILD_SOURCES_INPUT"
             echo "Using custom build sources from workflow input"
           elif [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # For scheduled/manual runs: test against multiple PRs for comprehensive validation
