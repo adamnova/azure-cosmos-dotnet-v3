@@ -17,7 +17,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
     {
         /// <summary>
         /// Checks if the experimental System.Text.Json processor switch is available.
-        /// This feature was introduced in PR #5403 via EncryptionRequestOptionsExperimental.SetExperimentalJsonProcessorMode.
+        /// This feature was introduced in PR #5403 via EncryptionRequestOptionsExperimental.ConfigureJsonProcessor.
         /// </summary>
         public static bool SupportsSystemTextJsonSwitch(VersionLoader loader)
         {
@@ -26,21 +26,60 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 throw new ArgumentNullException(nameof(loader));
             }
 
-            // Look for the EncryptionRequestOptionsExperimental class and SetExperimentalJsonProcessorMode method
+            // Look for the EncryptionRequestOptionsExperimental class and ConfigureJsonProcessor method
             Type experimentalType = loader.GetType("Microsoft.Azure.Cosmos.Encryption.Custom.EncryptionRequestOptionsExperimental");
             if (experimentalType == null)
             {
                 return false;
             }
 
-            MethodInfo method = experimentalType.GetMethod(
-                "SetExperimentalJsonProcessorMode",
-                BindingFlags.Public | BindingFlags.Static,
-                null,
-                new[] { typeof(object), typeof(bool) }, // RequestOptions is not available, so use object
-                null);
+            // Check for the ConfigureJsonProcessor extension method
+            MethodInfo[] methods = experimentalType.GetMethods(BindingFlags.Public | BindingFlags.Static);
+            foreach (MethodInfo method in methods)
+            {
+                if (method.Name == "ConfigureJsonProcessor" && method.GetParameters().Length == 2)
+                {
+                    return true;
+                }
+            }
 
-            return method != null;
+            return false;
+        }
+
+        /// <summary>
+        /// Checks if the JsonProcessor enum is available (needed for System.Text.Json support).
+        /// </summary>
+        public static bool HasJsonProcessorEnum(VersionLoader loader)
+        {
+            if (loader == null)
+            {
+                throw new ArgumentNullException(nameof(loader));
+            }
+
+            Type jsonProcessorType = loader.GetType("Microsoft.Azure.Cosmos.Encryption.Custom.JsonProcessor");
+            return jsonProcessorType != null && jsonProcessorType.IsEnum;
+        }
+
+        /// <summary>
+        /// Checks if the JsonProcessor.Stream enum value is available.
+        /// This is conditional on ENCRYPTION_CUSTOM_PREVIEW and NET8_0_OR_GREATER.
+        /// </summary>
+        public static bool HasStreamJsonProcessorValue(VersionLoader loader)
+        {
+            if (loader == null)
+            {
+                throw new ArgumentNullException(nameof(loader));
+            }
+
+            Type jsonProcessorType = loader.GetType("Microsoft.Azure.Cosmos.Encryption.Custom.JsonProcessor");
+            if (jsonProcessorType == null || !jsonProcessorType.IsEnum)
+            {
+                return false;
+            }
+
+            // Check if "Stream" value exists in the enum
+            string[] enumNames = Enum.GetNames(jsonProcessorType);
+            return enumNames.Any(name => string.Equals(name, "Stream", StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -84,9 +123,10 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 throw new ArgumentNullException(nameof(loader));
             }
 
-            var features = new[]
+            (string, bool)[] features = new[]
             {
                 ("SystemTextJsonSwitch", SupportsSystemTextJsonSwitch(loader)),
+                ("StreamJsonProcessorValue", HasStreamJsonProcessorValue(loader)),
                 ("DeterministicEncryption", SupportsDeterministicEncryption(loader)),
             };
 
