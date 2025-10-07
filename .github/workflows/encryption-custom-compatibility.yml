@@ -58,14 +58,8 @@ jobs:
             echo "Using custom build sources from workflow input"
           else
             # Always test against all sources (current + 5 PRs) for comprehensive validation
-            BUILD_SOURCES='[
-              {"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"},
-              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5385/head","source_name":"pr-5385"},
-              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5399/head","source_name":"pr-5399"},
-              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5403/head","source_name":"pr-5403"},
-              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5417/head","source_name":"pr-5417"},
-              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5428/head","source_name":"pr-5428"}
-            ]'
+            # Single-line JSON to avoid formatting issues
+            BUILD_SOURCES='[{"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5385/head","source_name":"pr-5385"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5399/head","source_name":"pr-5399"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5403/head","source_name":"pr-5403"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5417/head","source_name":"pr-5417"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5428/head","source_name":"pr-5428"}]'
             echo "Using full build matrix with all PRs"
           fi
           
