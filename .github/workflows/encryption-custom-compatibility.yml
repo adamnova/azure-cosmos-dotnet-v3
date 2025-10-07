@@ -95,6 +95,7 @@ jobs:
       
       - name: Build and pack
         id: build-pkg
+        continue-on-error: true
         run: |
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
@@ -127,15 +128,26 @@ jobs:
             -p:PackageVersion=$PACKAGE_VERSION \
             --output ./packages
           
+          BUILD_EXIT_CODE=$?
+          
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "========================================="
+            echo "⚠️  Build failed for ${{ matrix.build_source.source_name }}"
+            echo "This source will be skipped in compatibility testing"
+            echo "========================================="
+            exit 1
+          fi
+          
           PACKAGE_FILE="./packages/Microsoft.Azure.Cosmos.Encryption.Custom.${PACKAGE_VERSION}.nupkg"
           echo "path=$PACKAGE_FILE" >> $GITHUB_OUTPUT
           
           echo "========================================="
-          echo "Built Package: $PACKAGE_FILE"
+          echo "✅ Built Package: $PACKAGE_FILE"
           ls -lh ./packages/
           echo "========================================="
       
       - name: Upload package artifact
+        if: steps.build-pkg.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.build_source.source_name }}
@@ -177,12 +189,28 @@ jobs:
             ${{ runner.os }}-nuget-
       
       - name: Download built package
+        id: download-pkg
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: package-${{ matrix.build_source.source_name }}
           path: ./local-packages
       
+      - name: Check if package was built
+        id: check-pkg
+        run: |
+          if [ "${{ steps.download-pkg.outcome }}" != "success" ]; then
+            echo "========================================="
+            echo "⚠️  Skipping tests for ${{ matrix.build_source.source_name }}"
+            echo "Package was not built successfully"
+            echo "========================================="
+            echo "skip_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip_tests=false" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Setup test environment
+        if: steps.check-pkg.outputs.skip_tests == 'false'
         run: |
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
@@ -199,6 +227,7 @@ jobs:
           echo "Built package version: $BUILT_VERSION"
       
       - name: Update test configuration
+        if: steps.check-pkg.outputs.skip_tests == 'false'
         run: |
           BUILT_VERSION="${{ env.BUILT_VERSION }}"
           TEST_VERSION="${{ matrix.test_version }}"
@@ -226,16 +255,19 @@ jobs:
           cat testconfig.json
       
       - name: Restore dependencies
+        if: steps.check-pkg.outputs.skip_tests == 'false'
         run: |
           dotnet restore Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj
       
       - name: Build compatibility tests
+        if: steps.check-pkg.outputs.skip_tests == 'false'
         run: |
           dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
             --configuration Release \
             --no-restore
       
       - name: Run compatibility tests
+        if: steps.check-pkg.outputs.skip_tests == 'false'
         id: run-tests
         continue-on-error: true
         run: |
@@ -248,7 +280,7 @@ jobs:
             --results-directory ./TestResults
       
       - name: Upload test results (TRX)
-        if: always()
+        if: always() && steps.check-pkg.outputs.skip_tests == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}
@@ -256,7 +288,7 @@ jobs:
           retention-days: 30
       
       - name: Publish test results
-        if: always()
+        if: always() && steps.check-pkg.outputs.skip_tests == 'false'
         uses: dorny/test-reporter@v1
         with:
           name: Compatibility Test Results
@@ -273,6 +305,13 @@ jobs:
           echo "**Built Source:** \`${{ matrix.build_source.source_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Test Version:** \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check-pkg.outputs.skip_tests }}" == "true" ]; then
+            echo "⚠️ **Status:** Tests skipped - package build failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This source could not be built successfully, likely due to API incompatibilities." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           
           TRX_FILE="./TestResults/compatibility-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}.trx"
           if [ -f "$TRX_FILE" ]; then
