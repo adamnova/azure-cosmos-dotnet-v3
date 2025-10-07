@@ -20,50 +20,96 @@ on:
   workflow_dispatch:
     inputs:
       test_versions:
-        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07,current"). Tests all pairs automatically.'
+        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07"). Leave empty to test against all build sources.'
         required: false
-        default: '1.0.0-preview07,current'
+        default: '1.0.0-preview07'
+        type: string
+      build_sources:
+        description: 'JSON array of build sources: [{"repo":"owner/repo","ref":"branch","name":"label"}]. Leave empty for current repo/branch.'
+        required: false
+        default: ''
         type: string
 
 env:
   DOTNET_VERSION: '8.0.x'
 
 jobs:
-  # Build current source code as NuGet package
-  build-current-package:
-    name: Build Current Package
+  # Prepare build matrix
+  prepare-matrix:
+    name: Prepare Build Matrix
     runs-on: ubuntu-latest
     outputs:
+      build_sources: ${{ steps.setup-matrix.outputs.build_sources }}
+    
+    steps:
+      - name: Setup build matrix
+        id: setup-matrix
+        run: |
+          # Use custom build sources if provided, otherwise use current repo/branch
+          if [ -n "${{ github.event.inputs.build_sources }}" ]; then
+            BUILD_SOURCES='${{ github.event.inputs.build_sources }}'
+            echo "Using custom build sources from workflow input"
+          else
+            # Default: build from current repository and branch
+            BUILD_SOURCES='[{"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"}]'
+            echo "Using default build source: current repository and branch"
+          fi
+          
+          echo "build_sources=$BUILD_SOURCES" >> $GITHUB_OUTPUT
+          echo "Build sources matrix:"
+          echo "$BUILD_SOURCES" | jq '.'
+
+  # Build packages from different sources (matrix)
+  build-packages:
+    name: Build ${{ matrix.build_source.source_name }}
+    needs: prepare-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
+    
+    outputs:
+      # Output pattern: package_version_<source_name>
       package_version: ${{ steps.build-pkg.outputs.version }}
-      package_path: ${{ steps.build-pkg.outputs.path }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
       
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       
-      - name: Build and pack current version
+      - name: Build and pack
         id: build-pkg
         run: |
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
           
-          # Generate unique version with PR/run number
+          # Generate unique version with source identifier
+          SOURCE_SLUG=$(echo "${{ matrix.build_source.source_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
+          
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            VERSION_SUFFIX="pr${{ github.event.pull_request.number }}-${{ github.run_number }}"
+            VERSION_SUFFIX="pr${{ github.event.pull_request.number }}-${SOURCE_SLUG}-${{ github.run_number }}"
           else
-            VERSION_SUFFIX="ci-${{ github.run_number }}"
+            VERSION_SUFFIX="${SOURCE_SLUG}-${{ github.run_number }}"
           fi
           
           # Get base version from Directory.Build.props
           BASE_VERSION=$(grep -oPm1 "(?<=<CustomEncryptionVersion>)[^<]+" Directory.Build.props)
           PACKAGE_VERSION="${BASE_VERSION}-${VERSION_SUFFIX}"
           
-          echo "Building package version: $PACKAGE_VERSION"
+          echo "========================================="
+          echo "Building from: ${{ matrix.repository }}@${{ matrix.ref }}"
+          echo "Source name: ${{ matrix.build_source.source_name }}"
+          echo "Package version: $PACKAGE_VERSION"
+          echo "========================================="
+          
           echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
           
           # Build and pack
@@ -84,24 +130,25 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: current-package
+          name: package-${{ matrix.build_source.source_name }}
           path: ./packages/*.nupkg
           retention-days: 7
 
   # Run compatibility tests with version matrix
-  # Each matrix entry tests bidirectional compatibility between two versions
+  # Tests built packages against specified published versions
   compatibility-tests:
-    name: Test ${{ matrix.version1 }} ⟷ ${{ matrix.version2 }}
-    needs: build-current-package
+    name: Test ${{ matrix.build_source.source_name }} ⟷ ${{ matrix.test_version }}
+    needs: [prepare-matrix, build-packages]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Test current version against preview07 (bidirectional)
-          - version1: ${{ needs.build-current-package.outputs.package_version }}
-            version2: '1.0.0-preview07'
-            version_pair_name: 'current_vs_preview07'
+        # Each build source will be tested against each test version
+        build_source: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
+        test_version:
+          - '1.0.0-preview07'
+          # Add more versions here as needed
+          # - '1.0.0-preview06'
     
     steps:
       - name: Checkout code
@@ -121,10 +168,10 @@ jobs:
             ${{ runner.os }}-nuget-compat-
             ${{ runner.os }}-nuget-
       
-      - name: Download current package
+      - name: Download built package
         uses: actions/download-artifact@v4
         with:
-          name: current-package
+          name: package-${{ matrix.build_source.source_name }}
           path: ./local-packages
       
       - name: Setup test environment
@@ -132,24 +179,31 @@ jobs:
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
           
-          # Copy current package to artifacts/local-packages
+          # Copy built package to artifacts/local-packages
           cp ./local-packages/*.nupkg artifacts/local-packages/
-          echo "Copied current package to artifacts/local-packages"
+          echo "Copied built package to artifacts/local-packages"
           ls -lh artifacts/local-packages/
+          
+          # Get the actual package version from the filename
+          BUILT_PACKAGE=$(ls ./local-packages/Microsoft.Azure.Cosmos.Encryption.Custom.*.nupkg | head -1)
+          BUILT_VERSION=$(basename "$BUILT_PACKAGE" | sed 's/Microsoft.Azure.Cosmos.Encryption.Custom.\(.*\).nupkg/\1/')
+          echo "BUILT_VERSION=$BUILT_VERSION" >> $GITHUB_ENV
+          echo "Built package version: $BUILT_VERSION"
       
       - name: Update test configuration
         run: |
-          VERSION1="${{ matrix.version1 }}"
-          VERSION2="${{ matrix.version2 }}"
+          BUILT_VERSION="${{ env.BUILT_VERSION }}"
+          TEST_VERSION="${{ matrix.test_version }}"
           
           # Create version array for this specific test pair
-          VERSIONS_JSON="[\"$VERSION1\",\"$VERSION2\"]"
+          VERSIONS_JSON="[\"$BUILT_VERSION\",\"$TEST_VERSION\"]"
           
           echo "========================================="
           echo "Test Pair Configuration"
           echo "========================================="
-          echo "Version 1: $VERSION1"
-          echo "Version 2: $VERSION2"
+          echo "Built Source: ${{ matrix.build_source.source_name }}"
+          echo "Built Version: $BUILT_VERSION"
+          echo "Test Version: $TEST_VERSION"
           echo "Test versions: $VERSIONS_JSON"
           echo "========================================="
           
@@ -181,7 +235,7 @@ jobs:
             --configuration Release \
             --no-build \
             --no-restore \
-            --logger "trx;LogFileName=compatibility-${{ matrix.version_pair_name }}.trx" \
+            --logger "trx;LogFileName=compatibility-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}.trx" \
             --logger "console;verbosity=normal" \
             --results-directory ./TestResults
       
@@ -189,7 +243,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.version_pair_name }}
+          name: test-results-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}
           path: ./TestResults/*.trx
           retention-days: 30
       
@@ -206,13 +260,13 @@ jobs:
       - name: Generate test summary
         if: always()
         run: |
-          echo "## 🧪 Compatibility Test Results: ${{ matrix.version_pair_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Compatibility Test Results: ${{ matrix.build_source.source_name }} vs ${{ matrix.test_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version 1:** \`${{ matrix.version1 }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Version 2:** \`${{ matrix.version2 }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Built Source:** \`${{ matrix.build_source.source_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Version:** \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          TRX_FILE="./TestResults/compatibility-${{ matrix.version_pair_name }}.trx"
+          TRX_FILE="./TestResults/compatibility-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}.trx"
           if [ -f "$TRX_FILE" ]; then
             # Parse TRX file for summary (basic parsing)
             TOTAL=$(grep -oP '(?<=total=")[^"]+' "$TRX_FILE" | head -1)
@@ -238,7 +292,7 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "📦 **Test Pair:** \`${{ matrix.version1 }}\` ⟷ \`${{ matrix.version2 }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Test Pair:** \`${{ matrix.build_source.source_name }}\` ⟷ \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
       
       - name: Fail workflow if tests failed
         if: steps.run-tests.outcome == 'failure'
@@ -252,9 +306,8 @@ jobs:
           echo "========================================="
           echo "Compatibility Test Summary"
           echo "========================================="
-          echo "Version 1: ${{ matrix.version1 }}"
-          echo "Version 2: ${{ matrix.version2 }}"
-          echo "Test Pair: ${{ matrix.version_pair_name }}"
+          echo "Built Source: ${{ matrix.build_source.source_name }}"
+          echo "Test Version: ${{ matrix.test_version }}"
           echo "========================================="
           
           if [ "${{ steps.run-tests.outcome }}" == "success" ]; then
