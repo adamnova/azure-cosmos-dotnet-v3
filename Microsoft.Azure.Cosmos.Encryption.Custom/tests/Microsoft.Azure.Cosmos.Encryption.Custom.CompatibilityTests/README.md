@@ -26,11 +26,31 @@ This ensures customers can:
 
 ### CrossVersionEncryptionTests.cs
 
-The **only** test file. Contains:
+The main test file for basic compatibility. Contains:
 
 1. **CanEncryptWithVersionA_AndDecryptWithVersionB** - Basic cross-version compatibility
 2. **CanEncryptAndDecryptDeterministic_AcrossVersions** - Deterministic mode testing
 3. **CanEncryptAndDecryptRandomized_AcrossVersions** - Randomized mode testing
+
+### CrossVersionSystemTextJsonTests.cs
+
+Tests the experimental System.Text.Json streaming processor (introduced in PR #5403). Contains:
+
+1. **CanEncryptAndDecrypt_AcrossJsonProcessorModes** - Cross-mode compatibility (Newtonsoft ↔ System.Text.Json)
+2. **CanEncryptAndDecryptDeterministic_AcrossJsonProcessorModes** - Deterministic encryption across modes
+
+These tests automatically skip when testing against versions that don't support the System.Text.Json switch.
+
+### Feature Availability
+
+The `FeatureAvailability` helper class detects which features are available in each version:
+
+- **System.Text.Json Switch**: Detects `EncryptionRequestOptionsExperimental.SetExperimentalJsonProcessorMode`
+- **Deterministic Encryption**: Detects deterministic algorithm support
+
+This allows tests to gracefully skip unsupported features in older versions, ensuring backward compatibility.
+
+See [SYSTEM_TEXT_JSON_TESTING.md](./SYSTEM_TEXT_JSON_TESTING.md) for detailed information about System.Text.Json compatibility testing.
 
 Each test runs for **all version pairs** defined in `testconfig.json`.
 

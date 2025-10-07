@@ -56,6 +56,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 Dictionary<string, string> versionInfo = new Dictionary<string, string>();
+                Dictionary<string, string> featureInfo = new Dictionary<string, string>();
 
                 // Load each version and get its informational version
                 foreach (string packageVersion in versions)
@@ -74,6 +75,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                             ?? "unknown";
 
                         versionInfo[packageVersion] = actualVersion;
+
+                        // Capture feature availability for this version
+                        featureInfo[packageVersion] = FeatureAvailability.GetFeatureSummary(loader);
                     }
                 }
 
@@ -91,6 +95,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 // Log the validation results
                 this.Output.WriteLine("🔍 Version Validation:");
                 this.LogVersionInfo(versionInfo);
+                this.LogFeatureInfo(featureInfo);
                 this.Output.WriteLine("✅ All versions are distinct - compatibility testing is valid");
                 this.Output.WriteLine("");
             }
@@ -107,6 +112,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             foreach (KeyValuePair<string, string> kvp in versionInfo)
             {
                 this.Output.WriteLine($"   • {kvp.Key} → {kvp.Value}");
+            }
+        }
+
+        private void LogFeatureInfo(Dictionary<string, string> featureInfo)
+        {
+            if (featureInfo == null || !featureInfo.Any())
+            {
+                return;
+            }
+
+            this.Output.WriteLine("");
+            this.Output.WriteLine("   Feature Availability:");
+            foreach (KeyValuePair<string, string> kvp in featureInfo)
+            {
+                this.Output.WriteLine($"   • {kvp.Key}: {kvp.Value}");
             }
         }
 
