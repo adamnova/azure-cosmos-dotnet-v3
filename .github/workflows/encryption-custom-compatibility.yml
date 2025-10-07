@@ -95,7 +95,6 @@ jobs:
       
       - name: Build and pack
         id: build-pkg
-        continue-on-error: true
         run: |
           # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
           mkdir -p artifacts/local-packages
@@ -159,6 +158,7 @@ jobs:
   compatibility-tests:
     name: Test ${{ matrix.build_source.source_name }} ⟷ ${{ matrix.test_version }}
     needs: [prepare-matrix, build-packages]
+    if: always()
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
