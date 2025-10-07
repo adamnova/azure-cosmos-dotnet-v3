@@ -45,12 +45,23 @@ jobs:
       - name: Setup build matrix
         id: setup-matrix
         run: |
-          # Use custom build sources if provided, otherwise use current repo/branch
+          # Use custom build sources if provided, otherwise use defaults based on trigger
           if [ -n "${{ github.event.inputs.build_sources }}" ]; then
             BUILD_SOURCES='${{ github.event.inputs.build_sources }}'
             echo "Using custom build sources from workflow input"
+          elif [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # For scheduled/manual runs: test against multiple PRs for comprehensive validation
+            BUILD_SOURCES='[
+              {"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"},
+              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5385/head","source_name":"pr-5385"},
+              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5399/head","source_name":"pr-5399"},
+              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5403/head","source_name":"pr-5403"},
+              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5417/head","source_name":"pr-5417"},
+              {"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5428/head","source_name":"pr-5428"}
+            ]'
+            echo "Using expanded build matrix with PRs for scheduled/manual run"
           else
-            # Default: build from current repository and branch
+            # For PR/CI builds: only test current branch for fast feedback
             BUILD_SOURCES='[{"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"}]'
             echo "Using default build source: current repository and branch"
           fi
