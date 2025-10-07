@@ -1,4 +1,5 @@
 name: Encryption.Custom Compatibility Tests
+# Manual runs: Go to Actions > Encryption.Custom Compatibility Tests > Run workflow
 
 on:
   pull_request:
