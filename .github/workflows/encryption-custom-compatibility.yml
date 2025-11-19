@@ -21,9 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       test_versions:
-        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07"). Leave empty to test against all build sources.'
+        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07"). Leave empty to use testconfig defaults.'
         required: false
-        default: '1.0.0-preview07'
+        default: ''
         type: string
       build_sources:
         description: 'JSON array of build sources: [{"repo":"owner/repo","ref":"branch","name":"label"}]. Leave empty for current repo/branch.'
@@ -41,31 +41,67 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build_sources: ${{ steps.setup-matrix.outputs.build_sources }}
+      test_versions: ${{ steps.setup-matrix.outputs.test_versions }}
     
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup build matrix
         id: setup-matrix
         run: |
+          set -euo pipefail
+
           # Debug: Show trigger information
           echo "Event name: ${{ github.event_name }}"
           echo "Build sources input: '${{ github.event.inputs.build_sources }}'"
+          echo "Test versions input: '${{ github.event.inputs.test_versions }}'"
           
-          # Use custom build sources if provided via workflow_dispatch input
           BUILD_SOURCES_INPUT="${{ github.event.inputs.build_sources }}"
-          
-          if [ -n "$BUILD_SOURCES_INPUT" ] && [ "$BUILD_SOURCES_INPUT" != "" ]; then
+          TEST_VERSIONS_INPUT="${{ github.event.inputs.test_versions }}"
+          CONFIG_PATH="Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/testconfig.json"
+
+          # Default build source = current repo/ref
+          DEFAULT_BUILD_SOURCES=$(jq -nc \
+            --arg repo "${{ github.repository }}" \
+            --arg ref "${{ github.ref }}" \
+            '[{"repository":$repo,"ref":$ref,"source_name":"current"}]')
+
+          if [ -n "$BUILD_SOURCES_INPUT" ]; then
             BUILD_SOURCES="$BUILD_SOURCES_INPUT"
             echo "Using custom build sources from workflow input"
           else
-            # Always test against all sources (current + 5 PRs) for comprehensive validation
-            # Single-line JSON to avoid formatting issues
-            BUILD_SOURCES='[{"repository":"${{ github.repository }}","ref":"${{ github.ref }}","source_name":"current"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5385/head","source_name":"pr-5385"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5399/head","source_name":"pr-5399"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5403/head","source_name":"pr-5403"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5417/head","source_name":"pr-5417"},{"repository":"Azure/azure-cosmos-dotnet-v3","ref":"refs/pull/5428/head","source_name":"pr-5428"}]'
-            echo "Using full build matrix with all PRs"
+            BUILD_SOURCES="$DEFAULT_BUILD_SOURCES"
+            echo "Using default build source (current repo/ref)"
+          fi
+
+          if [ -n "$TEST_VERSIONS_INPUT" ]; then
+            TEST_VERSIONS=$(echo "$TEST_VERSIONS_INPUT" | jq -R 'split(",") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+            if [ "$(echo "$TEST_VERSIONS" | jq 'length')" -eq 0 ]; then
+              echo "⚠️  No valid test versions provided via input, will fall back to config"
+              TEST_VERSIONS=""
+            fi
+          else
+            TEST_VERSIONS=""
+          fi
+
+          if [ -z "$TEST_VERSIONS" ]; then
+            if [ -f "$CONFIG_PATH" ]; then
+              TEST_VERSIONS=$(jq '.versionMatrix.versions' "$CONFIG_PATH")
+              echo "Loaded test versions from $CONFIG_PATH"
+            else
+              echo "⚠️  Test config not found at $CONFIG_PATH; defaulting to preview07"
+              TEST_VERSIONS='["1.0.0-preview07"]'
+            fi
           fi
           
-          echo "build_sources=$BUILD_SOURCES" >> $GITHUB_OUTPUT
+          echo "build_sources=$BUILD_SOURCES" >> "$GITHUB_OUTPUT"
+          echo "test_versions=$TEST_VERSIONS" >> "$GITHUB_OUTPUT"
+          
           echo "Build sources matrix:"
           echo "$BUILD_SOURCES" | jq '.'
+          echo "Test versions matrix:"
+          echo "$TEST_VERSIONS" | jq '.'
 
   # Build packages from different sources (matrix)
   build-packages:
@@ -165,10 +201,7 @@ jobs:
       matrix:
         # Each build source will be tested against each test version
         build_source: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
-        test_version:
-          - '1.0.0-preview07'
-          # Add more versions here as needed
-          # - '1.0.0-preview06'
+        test_version: ${{ fromJson(needs.prepare-matrix.outputs.test_versions) }}
     
     steps:
       - name: Checkout code
@@ -229,7 +262,7 @@ jobs:
       - name: Update test configuration
         if: steps.check-pkg.outputs.skip_tests == 'false'
         run: |
-          BUILT_VERSION="${{ env.BUILT_VERSION }}"
+          BUILT_VERSION="$BUILT_VERSION"
           TEST_VERSION="${{ matrix.test_version }}"
           
           # Create version array for this specific test pair

@@ -62,7 +62,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             try
             {
                 // Act: Encrypt with version A
-                using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+                using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
                 {
                     encryptedData = this.EncryptDataWithVersion(encryptLoader, testData);
                     encryptedData.Should().NotBeNull($"Encryption with {encryptVersion} should produce data");
@@ -76,7 +76,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 // Act: Decrypt with version B
-                using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+                using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
                 {
                     decryptedData = this.DecryptDataWithVersion(decryptLoader, encryptedData);
                     decryptedData.Should().NotBeNull($"Decryption with {decryptVersion} should produce data");
@@ -101,6 +101,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
         [MemberData(nameof(GetVersionPairs))]
         public void CanEncryptAndDecryptDeterministic_AcrossVersions(string encryptVersion, string decryptVersion)
         {
+            string resolvedEncryptVersion = VersionMatrix.ResolveVersion(encryptVersion);
+            string resolvedDecryptVersion = VersionMatrix.ResolveVersion(decryptVersion);
+
             this.LogInfo($"Testing Deterministic: Encrypt with {encryptVersion} → Decrypt with {decryptVersion}");
 
             // Arrange
@@ -112,7 +115,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             try
             {
                 // Act: Encrypt same data twice with version A using deterministic encryption
-                using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+                using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
                 {
                     encryptedData1 = this.EncryptDataWithVersion(encryptLoader, testData, isDeterministic: true);
                     encryptedData2 = this.EncryptDataWithVersion(encryptLoader, testData, isDeterministic: true);
@@ -132,7 +135,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 // Act: Decrypt with version B
-                using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+                using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
                 {
                     decryptedData = this.DecryptDataWithVersion(decryptLoader, encryptedData1, isDeterministic: true);
                     decryptedData.Should().NotBeNull();
@@ -162,6 +165,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
         [MemberData(nameof(GetVersionPairs))]
         public void CanEncryptAndDecryptRandomized_AcrossVersions(string encryptVersion, string decryptVersion)
         {
+            string resolvedEncryptVersion = VersionMatrix.ResolveVersion(encryptVersion);
+            string resolvedDecryptVersion = VersionMatrix.ResolveVersion(decryptVersion);
+
             this.LogInfo($"Testing Randomized: Encrypt with {encryptVersion} → Decrypt with {decryptVersion}");
 
             // Arrange
@@ -173,7 +179,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             try
             {
                 // Act: Encrypt same data twice with version A using randomized encryption
-                using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+                using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
                 {
                     encryptedData1 = this.EncryptDataWithVersion(encryptLoader, testData, isDeterministic: false);
                     encryptedData2 = this.EncryptDataWithVersion(encryptLoader, testData, isDeterministic: false);
@@ -193,7 +199,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 // Act: Decrypt with version B
-                using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+                using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
                 {
                     decryptedData = this.DecryptDataWithVersion(decryptLoader, encryptedData1, isDeterministic: false);
                     decryptedData.Should().NotBeNull();

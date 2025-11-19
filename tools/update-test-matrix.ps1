@@ -85,28 +85,35 @@ Write-Host "Updating $testConfigPath..." -ForegroundColor Gray
 
 try {
     $config = Get-Content $testConfigPath -Raw | ConvertFrom-Json
-    
+    $matrix = $config.versionMatrix
+    $currentVersions = @($matrix.versions)
+
     if ($Remove) {
         # Remove version
-        if ($config.versionMatrix -contains $Version) {
-            $config.versionMatrix = $config.versionMatrix | Where-Object { $_ -ne $Version }
+        if ($currentVersions -contains $Version) {
+            $matrix.versions = $currentVersions | Where-Object { $_ -ne $Version }
             Write-Host "✅ Removed $Version from test matrix" -ForegroundColor Green
             
             # Check if removed version was baseline
-            if ($config.baselineVersion -eq $Version) {
-                Write-Host "⚠️  Removed version was the baseline!" -ForegroundColor Yellow
-                Write-Host "   Setting new baseline to: $($config.versionMatrix[0])" -ForegroundColor Yellow
-                $config.baselineVersion = $config.versionMatrix[0]
+            if ($matrix.baseline -eq $Version) {
+                $newBaseline = $matrix.versions | Select-Object -First 1
+                if ($null -ne $newBaseline) {
+                    Write-Host "⚠️  Removed version was the baseline!" -ForegroundColor Yellow
+                    Write-Host "   Setting new baseline to: $newBaseline" -ForegroundColor Yellow
+                    $matrix.baseline = $newBaseline
+                } else {
+                    Write-Host "⚠️  Version list is now empty; baseline cleared" -ForegroundColor Yellow
+                    $matrix.baseline = $null
+                }
             }
         } else {
             Write-Host "ℹ️  Version $Version not in matrix (nothing to remove)" -ForegroundColor Cyan
         }
     } else {
         # Add version if not already present
-        if ($config.versionMatrix -notcontains $Version) {
+        if ($currentVersions -notcontains $Version) {
             # Add at the beginning (latest versions first)
-            $newVersions = @($Version) + $config.versionMatrix
-            $config.versionMatrix = $newVersions
+            $matrix.versions = @($Version) + $currentVersions
             Write-Host "✅ Added $Version to test matrix" -ForegroundColor Green
         } else {
             Write-Host "ℹ️  Version $Version already in matrix" -ForegroundColor Cyan
@@ -114,8 +121,8 @@ try {
         
         # Update baseline if requested
         if ($SetBaseline) {
-            $oldBaseline = $config.baselineVersion
-            $config.baselineVersion = $Version
+            $oldBaseline = $matrix.baseline
+            $matrix.baseline = $Version
             Write-Host "✅ Updated baseline: $oldBaseline → $Version" -ForegroundColor Green
         }
     }
@@ -128,8 +135,8 @@ try {
     Write-Host "─────────────────────────────────────" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Current test matrix:" -ForegroundColor Cyan
-    $config.versionMatrix | ForEach-Object {
-        $isBaseline = $_ -eq $config.baselineVersion
+    $matrix.versions | ForEach-Object {
+        $isBaseline = $_ -eq $matrix.baseline
         if ($isBaseline) {
             Write-Host "  📌 $_ (baseline)" -ForegroundColor Yellow
         } else {
@@ -137,7 +144,7 @@ try {
         }
     }
     Write-Host ""
-    Write-Host "Baseline version: $($config.baselineVersion)" -ForegroundColor Yellow
+    Write-Host "Baseline version: $($matrix.baseline)" -ForegroundColor Yellow
     Write-Host ""
     
 } catch {

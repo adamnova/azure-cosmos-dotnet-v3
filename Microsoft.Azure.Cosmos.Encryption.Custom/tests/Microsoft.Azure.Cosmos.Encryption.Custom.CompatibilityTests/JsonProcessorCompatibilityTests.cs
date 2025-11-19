@@ -79,8 +79,15 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             JsonProcessorMode encryptMode,
             JsonProcessorMode decryptMode)
         {
-            string encryptDisplay = $"{encryptVersion}[{encryptMode}]";
-            string decryptDisplay = $"{decryptVersion}[{decryptMode}]";
+            string resolvedEncryptVersion = VersionMatrix.ResolveVersion(encryptVersion);
+            string resolvedDecryptVersion = VersionMatrix.ResolveVersion(decryptVersion);
+
+            string encryptDisplay = VersionMatrix.IsCurrentVersion(encryptVersion)
+                ? $"{encryptVersion} ({resolvedEncryptVersion})[{encryptMode}]"
+                : $"{encryptVersion}[{encryptMode}]";
+            string decryptDisplay = VersionMatrix.IsCurrentVersion(decryptVersion)
+                ? $"{decryptVersion} ({resolvedDecryptVersion})[{decryptMode}]"
+                : $"{decryptVersion}[{decryptMode}]";
 
             this.LogInfo($"Testing: Encrypt with {encryptDisplay} → Decrypt with {decryptDisplay}");
 
@@ -108,7 +115,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             try
             {
                 // Act: Encrypt with version A and specified mode
-                using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+                using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
                 {
                     encryptedData = this.EncryptDataWithMode(encryptLoader, testData, encryptMode);
                     encryptedData.Should().NotBeNull($"Encryption with {encryptDisplay} should produce data");
@@ -120,7 +127,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 // Act: Decrypt with version B and specified mode
-                using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+                using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
                 {
                     decryptedData = this.DecryptDataWithMode(decryptLoader, encryptedData, decryptMode);
                     decryptedData.Should().NotBeNull($"Decryption with {decryptDisplay} should produce data");
@@ -153,8 +160,15 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             JsonProcessorMode encryptMode,
             JsonProcessorMode decryptMode)
         {
-            string encryptDisplay = $"{encryptVersion}[{encryptMode}]";
-            string decryptDisplay = $"{decryptVersion}[{decryptMode}]";
+            string resolvedEncryptVersion = VersionMatrix.ResolveVersion(encryptVersion);
+            string resolvedDecryptVersion = VersionMatrix.ResolveVersion(decryptVersion);
+
+            string encryptDisplay = VersionMatrix.IsCurrentVersion(encryptVersion)
+                ? $"{encryptVersion} ({resolvedEncryptVersion})[{encryptMode}]"
+                : $"{encryptVersion}[{encryptMode}]";
+            string decryptDisplay = VersionMatrix.IsCurrentVersion(decryptVersion)
+                ? $"{decryptVersion} ({resolvedDecryptVersion})[{decryptMode}]"
+                : $"{decryptVersion}[{decryptMode}]";
 
             this.LogInfo($"Testing Deterministic: Encrypt with {encryptDisplay} → Decrypt with {decryptDisplay}");
 
@@ -178,12 +192,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             bool encryptSupportsDeterministic;
             bool decryptSupportsDeterministic;
 
-            using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+            using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
             {
                 encryptSupportsDeterministic = FeatureAvailability.SupportsDeterministicEncryption(encryptLoader);
             }
 
-            using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+            using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
             {
                 decryptSupportsDeterministic = FeatureAvailability.SupportsDeterministicEncryption(decryptLoader);
             }
@@ -209,7 +223,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             try
             {
                 // Act: Encrypt same data twice with deterministic encryption
-                using (VersionLoader encryptLoader = VersionLoader.Load(encryptVersion))
+                using (VersionLoader encryptLoader = VersionLoader.Load(resolvedEncryptVersion))
                 {
                     encryptedData1 = this.EncryptDataWithMode(encryptLoader, testData, encryptMode, isDeterministic: true);
                     encryptedData2 = this.EncryptDataWithMode(encryptLoader, testData, encryptMode, isDeterministic: true);
@@ -227,7 +241,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
                 }
 
                 // Act: Decrypt with version B
-                using (VersionLoader decryptLoader = VersionLoader.Load(decryptVersion))
+                using (VersionLoader decryptLoader = VersionLoader.Load(resolvedDecryptVersion))
                 {
                     decryptedData = this.DecryptDataWithMode(decryptLoader, encryptedData1, decryptMode, isDeterministic: true);
                     decryptedData.Should().NotBeNull();

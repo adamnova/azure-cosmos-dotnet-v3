@@ -54,6 +54,7 @@ steps:
       projects: 'Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/*.csproj'
       feedsToUse: 'config'
       nugetConfigPath: 'NuGet.config'
+      arguments: '-p:TargetEncryptionCustomVersion=${{ parameters.TestVersion }}'
       verbosityRestore: 'Minimal'
 
   - task: DotNetCoreCLI@2
