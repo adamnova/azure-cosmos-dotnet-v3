@@ -76,7 +76,7 @@ jobs:
           fi
 
           if [ -n "$TEST_VERSIONS_INPUT" ]; then
-            TEST_VERSIONS=$(echo "$TEST_VERSIONS_INPUT" | jq -R 'split(",") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+            TEST_VERSIONS=$(echo "$TEST_VERSIONS_INPUT" | jq -Rc 'split(",") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
             if [ "$(echo "$TEST_VERSIONS" | jq 'length')" -eq 0 ]; then
               echo "⚠️  No valid test versions provided via input, will fall back to config"
               TEST_VERSIONS=""
@@ -87,7 +87,7 @@ jobs:
 
           if [ -z "$TEST_VERSIONS" ]; then
             if [ -f "$CONFIG_PATH" ]; then
-              TEST_VERSIONS=$(jq '.versionMatrix.versions' "$CONFIG_PATH")
+              TEST_VERSIONS=$(jq -c '.versionMatrix.versions' "$CONFIG_PATH")
               echo "Loaded test versions from $CONFIG_PATH"
             else
               echo "⚠️  Test config not found at $CONFIG_PATH; defaulting to preview07"
