@@ -95,8 +95,17 @@ jobs:
             fi
           fi
           
-          echo "build_sources=$BUILD_SOURCES" >> "$GITHUB_OUTPUT"
-          echo "test_versions=$TEST_VERSIONS" >> "$GITHUB_OUTPUT"
+          {
+            echo "build_sources<<EOF"
+            echo "$BUILD_SOURCES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          
+          {
+            echo "test_versions<<EOF"
+            echo "$TEST_VERSIONS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           
           echo "Build sources matrix:"
           echo "$BUILD_SOURCES" | jq '.'
