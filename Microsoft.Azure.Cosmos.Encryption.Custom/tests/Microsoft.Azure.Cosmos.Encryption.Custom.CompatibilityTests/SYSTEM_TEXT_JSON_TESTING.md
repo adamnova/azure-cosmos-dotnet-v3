@@ -18,9 +18,9 @@ This detection works by checking for the presence of:
 
 ## Test Organization
 
-### CrossVersionSystemTextJsonTests
+### JsonProcessorCompatibilityTests
 
-A new test class `CrossVersionSystemTextJsonTests` validates compatibility across:
+The test class `JsonProcessorCompatibilityTests` validates compatibility across:
 - Different versions (e.g., 1.0.0-preview07 ↔ current)
 - Different JSON processor modes (Newtonsoft ↔ System.Text.Json)
 
@@ -199,7 +199,7 @@ Testing: Encrypt with current[SystemTextJson] → Decrypt with 1.0.0-preview07[N
 
 ### Low-Level vs High-Level Testing
 
-The current `CrossVersionSystemTextJsonTests` focuses on **binary-level encryption compatibility**:
+The current `JsonProcessorCompatibilityTests` focuses on **binary-level encryption compatibility**:
 - Tests use `DataEncryptionKey.EncryptData/DecryptData` directly
 - The JSON processor mode doesn't affect byte-level encryption format
 - This validates that the encrypted binary format remains compatible

@@ -18,7 +18,7 @@ I've successfully added comprehensive support for testing the experimental Syste
 - Ensures backward compatibility with older versions
 
 ### 3. **Comprehensive Test Coverage**
-New test class `CrossVersionSystemTextJsonTests` validates:
+Test class `JsonProcessorCompatibilityTests` validates:
 - **Cross-mode compatibility**: Newtonsoft ↔ System.Text.Json
 - **Cross-version compatibility**: Old version ↔ New version
 - **All combinations**: For each version pair, tests all processor mode combinations
@@ -33,7 +33,7 @@ New test class `CrossVersionSystemTextJsonTests` validates:
 
 1. **FeatureAvailability.cs** - Feature detection helper (~110 lines)
 2. **RequestOptionsHelper.cs** - RequestOptions configuration helper (~100 lines)
-3. **CrossVersionSystemTextJsonTests.cs** - Comprehensive test suite (~450 lines)
+3. **JsonProcessorCompatibilityTests.cs** - Comprehensive test suite (~550 lines)
 4. **SYSTEM_TEXT_JSON_TESTING.md** - Detailed documentation (~230 lines)
 5. **IMPLEMENTATION_SUMMARY.md** - Implementation summary (~280 lines)
 
@@ -116,7 +116,7 @@ dotnet test --filter "Category=Compatibility"
 dotnet test --filter "Feature=SystemTextJson"
 
 # Specific test method
-dotnet test --filter "FullyQualifiedName~CrossVersionSystemTextJsonTests"
+dotnet test --filter "FullyQualifiedName~JsonProcessorCompatibilityTests"
 ```
 
 ### Adding New Features

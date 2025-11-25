@@ -32,7 +32,7 @@ The main test file for basic compatibility. Contains:
 2. **CanEncryptAndDecryptDeterministic_AcrossVersions** - Deterministic mode testing
 3. **CanEncryptAndDecryptRandomized_AcrossVersions** - Randomized mode testing
 
-### CrossVersionSystemTextJsonTests.cs
+### JsonProcessorCompatibilityTests.cs
 
 Tests the experimental System.Text.Json streaming processor (introduced in PR #5403). Contains:
 

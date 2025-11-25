@@ -23,7 +23,7 @@ A utility for configuring RequestOptions with experimental features via reflecti
 
 **Key Design:** Works across versions by using reflection to invoke extension methods.
 
-### 3. **CrossVersionSystemTextJsonTests.cs**
+### 3. **JsonProcessorCompatibilityTests.cs**
 A comprehensive test suite for System.Text.Json compatibility:
 
 **Tests:**
@@ -70,7 +70,7 @@ Enhanced version validation to include feature availability:
 
 ### 2. **README.md**
 Updated the compatibility tests README to document:
-- New CrossVersionSystemTextJsonTests class
+- JsonProcessorCompatibilityTests class
 - Feature availability system
 - Link to detailed System.Text.Json documentation
 
