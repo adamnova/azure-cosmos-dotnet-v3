@@ -1,16 +1,16 @@
+// ----------------------------------------------------------------
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// ----------------------------------------------------------------
+
 namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
     using System.Linq;
     using System.Reflection;
-    using System.Runtime.Loader;
     using System.Text;
-    using System.Threading.Tasks;
     using FluentAssertions;
     using Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.SideBySide;
-    using Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.TestFixtures;
     using Xunit;
     using Xunit.Abstractions;
 
@@ -18,7 +18,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
     /// Tests cross-version encryption/decryption compatibility.
     /// The core purpose: verify that data encrypted with version A can be decrypted with version B, and vice versa.
     /// </summary>
+    [Collection(CompatibilityTestCollection.Name)]
     [Trait("Category", "Compatibility")]
+    [Trait("Type", "CrossVersion")]
     public class CrossVersionEncryptionTests : CompatibilityTestBase
     {
         public CrossVersionEncryptionTests(ITestOutputHelper output) : base(output) { }

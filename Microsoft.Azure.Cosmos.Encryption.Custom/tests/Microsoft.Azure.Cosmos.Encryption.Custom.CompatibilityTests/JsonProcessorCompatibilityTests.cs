@@ -19,6 +19,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
     /// Validates that data encrypted/decrypted with Newtonsoft.Json can be processed with System.Text.Json and vice versa.
     /// Handles graceful skipping when System.Text.Json mode is not available in older versions.
     /// </summary>
+    [Collection(CompatibilityTestCollection.Name)]
     [Trait("Category", "Compatibility")]
     [Trait("Feature", "JsonProcessor")]
     public class JsonProcessorCompatibilityTests : CompatibilityTestBase

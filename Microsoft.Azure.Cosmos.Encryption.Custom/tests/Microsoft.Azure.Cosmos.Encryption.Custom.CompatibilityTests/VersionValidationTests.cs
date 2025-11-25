@@ -14,6 +14,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
     /// Tests to validate that we're actually testing different versions
     /// and not accidentally testing the same version twice.
     /// </summary>
+    [Collection(CompatibilityTestCollection.Name)]
+    [Trait("Category", "Compatibility")]
+    [Trait("Type", "Validation")]
     public class VersionValidationTests : CompatibilityTestBase
     {
         public VersionValidationTests(ITestOutputHelper output) : base(output)

@@ -19,6 +19,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
     /// Tests edge cases and negative scenarios for encryption compatibility.
     /// These tests ensure the encryption implementation handles boundary conditions correctly.
     /// </summary>
+    [Collection(CompatibilityTestCollection.Name)]
     [Trait("Category", "Compatibility")]
     [Trait("Type", "EdgeCase")]
     public class EdgeCaseEncryptionTests : CompatibilityTestBase
@@ -343,7 +344,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
             
             for (int i = 0; i < length; i++)
             {
-                seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+                seed = ((seed * 1103515245) + 12345) & 0x7fffffff;
                 result[i] = (byte)(seed >> 16);
             }
             
@@ -352,7 +353,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
 
         private static byte[] CreateMixedBinaryTextPayload()
         {
-            using var ms = new System.IO.MemoryStream();
+            using System.IO.MemoryStream ms = new System.IO.MemoryStream();
             
             // Write some text
             byte[] text = Encoding.UTF8.GetBytes("Header: ");
