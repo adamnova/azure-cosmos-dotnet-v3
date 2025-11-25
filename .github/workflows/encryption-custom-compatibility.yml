@@ -211,6 +211,11 @@ jobs:
         # Each build source will be tested against each test version
         build_source: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
         test_version: ${{ fromJson(needs.prepare-matrix.outputs.test_versions) }}
+        # Exclude same-version pairs (current vs current) - no value in testing a version against itself
+        exclude:
+          - build_source:
+              source_name: current
+            test_version: current
     
     steps:
       - name: Checkout code
