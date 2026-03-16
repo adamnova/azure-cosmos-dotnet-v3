@@ -96,8 +96,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         }
 
         /// <summary>
-        /// Serializes an object directly to a stream asynchronously using Utf8JsonWriter with minimal allocations.
+        /// Serializes an object directly to a stream asynchronously with full cancellation support.
         /// </summary>
+        /// <remarks>
+        /// Uses JsonSerializer.SerializeAsync for true async I/O and cancellation throughout
+        /// the serialization pipeline, not just at the flush boundary.
+        /// </remarks>
         public static async Task SerializeToStreamAsync<T>(Stream stream, T value, JsonSerializerOptions options = null, CancellationToken cancellationToken = default)
         {
             if (stream == null)
@@ -105,11 +109,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 throw new ArgumentNullException(nameof(stream));
             }
 
-            await using (Utf8JsonWriter writer = new (stream, new JsonWriterOptions { SkipValidation = false }))
-            {
-                JsonSerializer.Serialize(writer, value, options ?? DefaultOptions);
-                await writer.FlushAsync(cancellationToken);
-            }
+            await JsonSerializer.SerializeAsync(stream, value, options ?? DefaultOptions, cancellationToken);
         }
 
         /// <summary>

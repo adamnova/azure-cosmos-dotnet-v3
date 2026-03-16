@@ -42,6 +42,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
             bool isFinalBlock = false;
 
+            // Disposal design: encryptionPayloadWriter and bufferWriter are created and
+            // disposed inline during normal processing (set to null after each encrypted
+            // property). The finally block is a safety net that catches the case where an
+            // exception occurs between writer creation and its inline disposal/null-setting.
+            // On the happy path, both references will be null by the time finally runs, so
+            // the null-conditional calls are no-ops.
             Utf8JsonWriter encryptionPayloadWriter = null;
             string encryptPropertyName = null;
             RentArrayBufferWriter bufferWriter = null;
@@ -75,6 +81,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             }
             finally
             {
+                // Safety net: dispose any in-flight writer/buffer if an exception
+                // interrupted processing between creation and inline disposal.
                 if (encryptionPayloadWriter != null)
                 {
                     await encryptionPayloadWriter.DisposeAsync();

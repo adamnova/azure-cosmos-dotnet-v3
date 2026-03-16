@@ -60,7 +60,10 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// </summary>
         public static PooledStreamConfiguration Default { get; } = new PooledStreamConfiguration();
 
-        private static PooledStreamConfiguration current = Default;
+        // volatile ensures correct memory visibility across all architectures.
+        // Without volatile, a reader on another thread/core may see a stale cached
+        // value even though reference writes are atomic on .NET.
+        private static volatile PooledStreamConfiguration current = Default;
 
         /// <summary>
         /// Gets the current active configuration. Thread-safe.
@@ -73,9 +76,11 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// <param name="configuration">The new configuration to use. Cannot be null.</param>
         /// <exception cref="System.ArgumentNullException">Thrown when configuration is null.</exception>
         /// <remarks>
-        /// This performs an atomic reference swap. All operations started after this call
-        /// will use the new configuration. Operations already in progress will continue
-        /// using their captured configuration values.
+        /// This performs an atomic reference swap with volatile semantics, ensuring
+        /// correct memory visibility across all architectures and .NET runtimes.
+        /// All operations started after this call will use the new configuration.
+        /// Operations already in progress will continue using their captured
+        /// configuration values.
         /// </remarks>
         public static void SetConfiguration(PooledStreamConfiguration configuration)
         {

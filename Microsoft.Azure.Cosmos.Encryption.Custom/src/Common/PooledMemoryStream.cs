@@ -474,16 +474,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newCapacity);
 
-            // SECURITY FIX: Clear the new buffer to prevent exposing pool garbage.
-            // Rented buffers from ArrayPool may contain data from previous usage.
-            if (this.clearOnReturn)
-            {
-                Array.Clear(newBuffer, 0, newBuffer.Length);
-            }
-
+            // Copy existing data first, then clear only the tail region beyond
+            // the copied data. This avoids wastefully zeroing bytes that BlockCopy
+            // will immediately overwrite (e.g., for a 1MB buffer with 4KB of data,
+            // we skip clearing the first 4KB that gets overwritten).
             if (this.length > 0)
             {
                 Buffer.BlockCopy(this.buffer, 0, newBuffer, 0, this.length);
+            }
+
+            // SECURITY: Clear the region beyond copied data to prevent exposing
+            // pool garbage. Rented buffers from ArrayPool may contain data from
+            // previous usage.
+            if (this.clearOnReturn && newBuffer.Length > this.length)
+            {
+                Array.Clear(newBuffer, this.length, newBuffer.Length - this.length);
             }
 
             // Clear the entire old buffer before returning to the pool.
