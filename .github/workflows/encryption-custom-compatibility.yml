@@ -1,0 +1,430 @@
+name: Encryption.Custom Compatibility Tests
+# Manual runs: Go to Actions > Encryption.Custom Compatibility Tests > Run workflow
+
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+    paths:
+      - 'Microsoft.Azure.Cosmos.Encryption.Custom/**'
+      - '.github/workflows/encryption-custom-compatibility.yml'
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'Microsoft.Azure.Cosmos.Encryption.Custom/**'
+  schedule:
+    # Run daily at 2:00 AM UTC for comprehensive version matrix
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_versions:
+        description: 'Comma-separated list of versions to test (e.g., "1.0.0-preview07"). Leave empty to use testconfig defaults.'
+        required: false
+        default: ''
+        type: string
+      build_sources:
+        description: 'JSON array of build sources: [{"repo":"owner/repo","ref":"branch","name":"label"}]. Leave empty for current repo/branch.'
+        required: false
+        default: ''
+        type: string
+
+env:
+  DOTNET_VERSION: '8.0.x'
+
+jobs:
+  # Prepare build matrix
+  prepare-matrix:
+    name: Prepare Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      build_sources: ${{ steps.setup-matrix.outputs.build_sources }}
+      test_versions: ${{ steps.setup-matrix.outputs.test_versions }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup build matrix
+        id: setup-matrix
+        run: |
+          set -euo pipefail
+
+          # Debug: Show trigger information
+          echo "Event name: ${{ github.event_name }}"
+          echo "Build sources input: '${{ github.event.inputs.build_sources }}'"
+          echo "Test versions input: '${{ github.event.inputs.test_versions }}'"
+          
+          BUILD_SOURCES_INPUT="${{ github.event.inputs.build_sources }}"
+          TEST_VERSIONS_INPUT="${{ github.event.inputs.test_versions }}"
+          CONFIG_PATH="Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/testconfig.json"
+
+          # Default build source = current repo/ref
+          DEFAULT_BUILD_SOURCES=$(jq -nc \
+            --arg repo "${{ github.repository }}" \
+            --arg ref "${{ github.ref }}" \
+            '[{"repository":$repo,"ref":$ref,"source_name":"current"}]')
+
+          if [ -n "$BUILD_SOURCES_INPUT" ]; then
+            BUILD_SOURCES="$BUILD_SOURCES_INPUT"
+            echo "Using custom build sources from workflow input"
+          else
+            BUILD_SOURCES="$DEFAULT_BUILD_SOURCES"
+            echo "Using default build source (current repo/ref)"
+          fi
+
+          if [ -n "$TEST_VERSIONS_INPUT" ]; then
+            TEST_VERSIONS=$(echo "$TEST_VERSIONS_INPUT" | jq -Rc 'split(",") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+            if [ "$(echo "$TEST_VERSIONS" | jq 'length')" -eq 0 ]; then
+              echo "⚠️  No valid test versions provided via input, will fall back to config"
+              TEST_VERSIONS=""
+            fi
+          else
+            TEST_VERSIONS=""
+          fi
+
+          if [ -z "$TEST_VERSIONS" ]; then
+            if [ -f "$CONFIG_PATH" ]; then
+              TEST_VERSIONS=$(jq -c '.versionMatrix.versions' "$CONFIG_PATH")
+              echo "Loaded test versions from $CONFIG_PATH"
+            else
+              echo "⚠️  Test config not found at $CONFIG_PATH; defaulting to preview07"
+              TEST_VERSIONS='["1.0.0-preview07"]'
+            fi
+          fi
+          
+          {
+            echo "build_sources<<EOF"
+            echo "$BUILD_SOURCES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          
+          {
+            echo "test_versions<<EOF"
+            echo "$TEST_VERSIONS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          
+          echo "Build sources matrix:"
+          echo "$BUILD_SOURCES" | jq '.'
+          echo "Test versions matrix:"
+          echo "$TEST_VERSIONS" | jq '.'
+
+  # Build packages from different sources (matrix)
+  build-packages:
+    name: Build ${{ matrix.build_source.source_name }}
+    needs: prepare-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_source: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
+    
+    outputs:
+      # Output pattern: package_version_<source_name>
+      package_version: ${{ steps.build-pkg.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.build_source.repository }}
+          ref: ${{ matrix.build_source.ref }}
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Build and pack
+        id: build-pkg
+        run: |
+          # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
+          mkdir -p artifacts/local-packages
+          
+          # Generate unique version with source identifier
+          SOURCE_SLUG=$(echo "${{ matrix.build_source.source_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
+          
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            VERSION_SUFFIX="pr${{ github.event.pull_request.number }}-${SOURCE_SLUG}-${{ github.run_number }}"
+          else
+            VERSION_SUFFIX="${SOURCE_SLUG}-${{ github.run_number }}"
+          fi
+          
+          # Get base version from Directory.Build.props
+          BASE_VERSION=$(grep -oPm1 "(?<=<CustomEncryptionVersion>)[^<]+" Directory.Build.props)
+          PACKAGE_VERSION="${BASE_VERSION}-${VERSION_SUFFIX}"
+          
+          echo "========================================="
+          echo "Building from: ${{ matrix.build_source.repository }}@${{ matrix.build_source.ref }}"
+          echo "Source name: ${{ matrix.build_source.source_name }}"
+          echo "Package version: $PACKAGE_VERSION"
+          echo "========================================="
+          
+          echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          
+          # Build and pack
+          dotnet pack Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj \
+            --configuration Release \
+            -p:Version=$PACKAGE_VERSION \
+            -p:PackageVersion=$PACKAGE_VERSION \
+            --output ./packages
+          
+          BUILD_EXIT_CODE=$?
+          
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "========================================="
+            echo "⚠️  Build failed for ${{ matrix.build_source.source_name }}"
+            echo "This source will be skipped in compatibility testing"
+            echo "========================================="
+            exit 1
+          fi
+          
+          PACKAGE_FILE="./packages/Microsoft.Azure.Cosmos.Encryption.Custom.${PACKAGE_VERSION}.nupkg"
+          echo "path=$PACKAGE_FILE" >> $GITHUB_OUTPUT
+          
+          echo "========================================="
+          echo "✅ Built Package: $PACKAGE_FILE"
+          ls -lh ./packages/
+          echo "========================================="
+      
+      - name: Upload package artifact
+        if: steps.build-pkg.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.build_source.source_name }}
+          path: ./packages/*.nupkg
+          retention-days: 7
+
+  # Run compatibility tests with version matrix
+  # Tests built packages against specified published versions
+  compatibility-tests:
+    name: Test ${{ matrix.build_source.source_name }} ⟷ ${{ matrix.test_version }}
+    needs: [prepare-matrix, build-packages]
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each build source will be tested against each test version
+        build_source: ${{ fromJson(needs.prepare-matrix.outputs.build_sources) }}
+        test_version: ${{ fromJson(needs.prepare-matrix.outputs.test_versions) }}
+        # Exclude same-version pairs (current vs current) - no value in testing a version against itself
+        exclude:
+          - build_source:
+              source_name: current
+            test_version: current
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-compat-${{ hashFiles('**/Directory.Packages.props', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-compat-
+            ${{ runner.os }}-nuget-
+      
+      - name: Download built package
+        id: download-pkg
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: package-${{ matrix.build_source.source_name }}
+          path: ./local-packages
+      
+      - name: Check if package was built
+        id: check-pkg
+        run: |
+          if [ "${{ steps.download-pkg.outcome }}" != "success" ]; then
+            echo "========================================="
+            echo "⚠️  Skipping tests for ${{ matrix.build_source.source_name }}"
+            echo "Package was not built successfully"
+            echo "========================================="
+            echo "skip_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip_tests=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Setup test environment
+        if: steps.check-pkg.outputs.skip_tests == 'false'
+        run: |
+          # Create artifacts/local-packages folder (required by Directory.Build.props RestoreSources)
+          mkdir -p artifacts/local-packages
+          
+          # Copy built package to artifacts/local-packages
+          cp ./local-packages/*.nupkg artifacts/local-packages/
+          echo "Copied built package to artifacts/local-packages"
+          ls -lh artifacts/local-packages/
+          
+          # Get the actual package version from the filename
+          BUILT_PACKAGE=$(ls ./local-packages/Microsoft.Azure.Cosmos.Encryption.Custom.*.nupkg | head -1)
+          BUILT_VERSION=$(basename "$BUILT_PACKAGE" | sed 's/Microsoft.Azure.Cosmos.Encryption.Custom.\(.*\).nupkg/\1/')
+          echo "BUILT_VERSION=$BUILT_VERSION" >> $GITHUB_ENV
+          echo "Built package version: $BUILT_VERSION"
+      
+      - name: Update test configuration
+        if: steps.check-pkg.outputs.skip_tests == 'false'
+        run: |
+          BUILT_VERSION="$BUILT_VERSION"
+          TEST_VERSION="${{ matrix.test_version }}"
+          
+          # Create version array for this specific test pair
+          VERSIONS_JSON="[\"$BUILT_VERSION\",\"$TEST_VERSION\"]"
+          
+          echo "========================================="
+          echo "Test Pair Configuration"
+          echo "========================================="
+          echo "Built Source: ${{ matrix.build_source.source_name }}"
+          echo "Built Version: $BUILT_VERSION"
+          echo "Test Version: $TEST_VERSION"
+          echo "Test versions: $VERSIONS_JSON"
+          echo "========================================="
+          
+          # Update testconfig.json with this specific version pair
+          cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests
+          
+          # Update the versions array in testconfig.json
+          jq ".versionMatrix.versions = $VERSIONS_JSON" testconfig.json > testconfig.json.tmp
+          mv testconfig.json.tmp testconfig.json
+          
+          echo "Updated testconfig.json:"
+          cat testconfig.json
+      
+      - name: Restore dependencies
+        if: steps.check-pkg.outputs.skip_tests == 'false'
+        run: |
+          dotnet restore Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj
+      
+      - name: Build compatibility tests
+        if: steps.check-pkg.outputs.skip_tests == 'false'
+        run: |
+          dotnet build Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-restore
+      
+      - name: Run compatibility tests
+        if: steps.check-pkg.outputs.skip_tests == 'false'
+        id: run-tests
+        continue-on-error: true
+        run: |
+          dotnet test Microsoft.Azure.Cosmos.Encryption.Custom/tests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests/Microsoft.Azure.Cosmos.Encryption.Custom.CompatibilityTests.csproj \
+            --configuration Release \
+            --no-build \
+            --no-restore \
+            --logger "trx;LogFileName=compatibility-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}.trx" \
+            --logger "console;verbosity=normal" \
+            --results-directory ./TestResults
+      
+      - name: Upload test results (TRX)
+        if: always() && steps.check-pkg.outputs.skip_tests == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}
+          path: ./TestResults/*.trx
+          retention-days: 30
+      
+      - name: Publish test results
+        if: always() && steps.check-pkg.outputs.skip_tests == 'false'
+        uses: dorny/test-reporter@v1
+        with:
+          name: Compatibility Test Results
+          path: './TestResults/*.trx'
+          reporter: dotnet-trx
+          fail-on-error: true
+          fail-on-empty: true
+      
+      - name: Generate test summary
+        if: always()
+        run: |
+          # Generate source link
+          REPO="${{ matrix.build_source.repository }}"
+          REF="${{ matrix.build_source.ref }}"
+          SOURCE_NAME="${{ matrix.build_source.source_name }}"
+          
+          # Check if it's a PR reference (refs/pull/NUMBER/head)
+          if [[ "$REF" =~ ^refs/pull/([0-9]+)/head$ ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            SOURCE_LINK="[${SOURCE_NAME}](https://github.com/${REPO}/pull/${PR_NUMBER})"
+          else
+            # It's a branch
+            SOURCE_LINK="[${SOURCE_NAME}](https://github.com/${REPO}/tree/${REF})"
+          fi
+          
+          echo "## 🧪 Compatibility Test Results: ${SOURCE_LINK} ⟷ \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Built Source:** ${SOURCE_LINK}" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** \`${{ matrix.build_source.repository }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Ref:** \`${{ matrix.build_source.ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Version:** \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check-pkg.outputs.skip_tests }}" == "true" ]; then
+            echo "⚠️ **Status:** Tests skipped - package build failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This source could not be built successfully, likely due to API incompatibilities." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "👉 Check the build logs for details: ${SOURCE_LINK}" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          TRX_FILE="./TestResults/compatibility-${{ matrix.build_source.source_name }}-vs-${{ matrix.test_version }}.trx"
+          if [ -f "$TRX_FILE" ]; then
+            # Parse TRX file for summary (basic parsing)
+            TOTAL=$(grep -oP '(?<=total=")[^"]+' "$TRX_FILE" | head -1)
+            PASSED=$(grep -oP '(?<=passed=")[^"]+' "$TRX_FILE" | head -1)
+            FAILED=$(grep -oP '(?<=failed=")[^"]+' "$TRX_FILE" | head -1)
+            
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$FAILED" == "0" ]; then
+              echo "### ✅ All compatibility tests passed!" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ❌ Some compatibility tests failed" >> $GITHUB_STEP_SUMMARY
+              echo "Check the detailed test report above for failure details." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ Test results file not found: $TRX_FILE" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Test Pair:** \`${{ matrix.build_source.source_name }}\` ⟷ \`${{ matrix.test_version }}\`" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Fail workflow if tests failed
+        if: steps.run-tests.outcome == 'failure'
+        run: |
+          echo "❌ Compatibility tests failed"
+          exit 1
+      
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "========================================="
+          echo "Compatibility Test Summary"
+          echo "========================================="
+          echo "Built Source: ${{ matrix.build_source.source_name }}"
+          echo "Test Version: ${{ matrix.test_version }}"
+          echo "========================================="
+          
+          if [ "${{ steps.run-tests.outcome }}" == "success" ]; then
+            echo "✅ Compatibility test passed for this version pair"
+          else
+            echo "❌ Compatibility test failures detected for this version pair"
+          fi
+          echo "========================================="

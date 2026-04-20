@@ -1,0 +1,322 @@
+# Compatibility Testing Pipeline for Microsoft.Azure.Cosmos.Encryption.Custom
+# Tests current build against published NuGet package versions to catch breaking changes
+#
+# Matrix Strategy:
+# ----------------
+# The pipeline uses a dynamic matrix to test against multiple package versions:
+# - PR/CI builds: Test only against BaselineVersion (latest preview) via QuickCheck stage
+# - Other builds: Test against all versions in parameters.VersionsToTest via FullMatrix stage
+#
+# Adding New Versions:
+# --------------------
+# When a new preview or release version is published:
+# 1. Update 'BaselineVersion' variable to the latest version
+# 2. Add the new version to the 'VersionsToTest' parameter list (in parameters section)
+# 3. Optionally remove old versions if the matrix becomes too large
+#
+# Example in parameters section:
+#   - name: VersionsToTest
+#     type: object
+#     default:
+#       - '1.0.0-preview08'
+#       - '1.0.0-preview07'
+#       - '1.0.0-preview06'
+#
+# The matrix will automatically spawn parallel jobs for each version.
+
+trigger:
+  branches:
+    include:
+      - master
+      - feature/*
+  paths:
+    include:
+      - Microsoft.Azure.Cosmos.Encryption.Custom/**
+      - azure-pipelines-encryption-custom-compatibility.yml
+
+pr:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - Microsoft.Azure.Cosmos.Encryption.Custom/**
+
+schedules:
+  - cron: "0 2 * * *"  # Run daily at 2 AM UTC
+    displayName: 'Nightly Compatibility Test (Full Matrix)'
+    branches:
+      include:
+        - master
+    always: true
+
+variables:
+  BuildConfiguration: 'Release'
+  
+  # Baseline version (last published) for PR/CI builds
+  BaselineVersion: '1.0.0-preview07'
+
+parameters:
+  # Version matrix configuration
+  # For PR builds: Test against a minimal set for fast feedback
+  # For other builds: Test against full matrix for comprehensive validation
+  - name: VersionsToTest
+    type: object
+    default:
+      - '1.0.0-preview07'
+      - '1.0.0-preview06'
+      - '1.0.0-preview05'
+      - '1.0.0-preview04'
+  
+  # Minimal set for PR builds (fast feedback) - at least 2 versions to validate matrix
+  - name: PRVersionsToTest
+    type: object
+    default:
+      - '1.0.0-preview07'
+      - '1.0.0-preview06'
+
+stages:
+  # Stage 0: API Compatibility Check (fast fail on breaking changes)
+  - stage: ApiCompatibilityCheck
+    displayName: 'API Compatibility Check'
+    jobs:
+      - job: CheckApi
+        displayName: 'Validate API Surface'
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - template: templates/encryption-custom-apicompat-check.yml
+            parameters:
+              BaselineVersion: $(BaselineVersion)
+              StrictMode: false
+              BuildConfiguration: $(BuildConfiguration)
+
+  # Stage 1: Matrix compatibility testing
+  # PR builds: Test against minimal set (fast feedback)
+  # Other builds: Test against full matrix (comprehensive validation)
+  - stage: CompatibilityMatrix
+    displayName: 'Compatibility Matrix'
+    dependsOn: ApiCompatibilityCheck
+    condition: succeeded()
+    jobs:
+      # Dynamic matrix job - tests against all versions in parallel
+      ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
+        - job: CompatibilityTest
+          displayName: 'Test vs $(TestVersion)'
+          pool:
+            vmImage: 'windows-latest'
+          strategy:
+            matrix:
+              ${{ each version in parameters.PRVersionsToTest }}:
+                ${{ replace(replace(version, '.', '_'), '-', '_') }}:
+                  TestVersion: ${{ version }}
+          steps:
+            - template: templates/encryption-custom-compatibility-test-steps.yml
+              parameters:
+                BuildConfiguration: $(BuildConfiguration)
+                TestVersion: $(TestVersion)
+      
+      ${{ else }}:
+        - job: CompatibilityTest
+          displayName: 'Test vs $(TestVersion)'
+          pool:
+            vmImage: 'windows-latest'
+          strategy:
+            matrix:
+              ${{ each version in parameters.VersionsToTest }}:
+                ${{ replace(replace(version, '.', '_'), '-', '_') }}:
+                  TestVersion: ${{ version }}
+          steps:
+            - template: templates/encryption-custom-compatibility-test-steps.yml
+              parameters:
+                BuildConfiguration: $(BuildConfiguration)
+                TestVersion: $(TestVersion)
+
+  # Stage 3: Summary and reporting  
+  - stage: Report
+    displayName: 'Compatibility Report'
+    dependsOn:
+      - ApiCompatibilityCheck
+      - CompatibilityMatrix
+    condition: succeededOrFailed()
+    jobs:
+      - job: PublishResults
+        displayName: 'Publish Test Results'
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - task: DownloadBuildArtifacts@1
+            displayName: 'Download All Artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'specific'
+              downloadPath: '$(System.ArtifactsDirectory)'
+            continueOnError: true
+
+          - task: PowerShell@2
+            displayName: 'Generate Consolidated Compatibility Report'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Write-Host "========================================" -ForegroundColor Cyan
+                Write-Host "Consolidated Compatibility Report" -ForegroundColor Cyan
+                Write-Host "========================================" -ForegroundColor Cyan
+                Write-Host ""
+                
+                $reportDir = "$(Build.ArtifactStagingDirectory)/ConsolidatedReport"
+                New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+                
+                # Find all API compatibility reports
+                $apiCompatReports = Get-ChildItem -Path "$(System.ArtifactsDirectory)" -Filter "api-compat-*.txt" -Recurse
+                $compatibilityReports = Get-ChildItem -Path "$(System.ArtifactsDirectory)" -Filter "apicompat-*.txt" -Recurse
+                
+                # Generate consolidated markdown report
+                $consolidatedMd = @"
+                # Compatibility Testing - Consolidated Report
+                
+                **Build:** $(Build.BuildNumber)  
+                **Branch:** $(Build.SourceBranch)  
+                **Date:** $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')  
+                **Triggered By:** $(Build.Reason)
+                
+                ---
+                
+                ## Overview
+                
+                This report consolidates all compatibility testing results including:
+                - API Compatibility Analysis (using Microsoft.DotNet.ApiCompat.Tool)
+                - Version-specific compatibility tests
+                - Functional regression testing
+                
+                ## API Compatibility Check Results
+                
+                "@
+                
+                # Process API compat reports
+                if ($apiCompatReports.Count -gt 0) {
+                    foreach ($report in $apiCompatReports) {
+                        $consolidatedMd += "`n### API Check: $($report.Directory.Parent.Name)`n`n"
+                        $consolidatedMd += "``````text`n"
+                        $consolidatedMd += Get-Content $report.FullName -Raw
+                        $consolidatedMd += "`n```````n`n"
+                    }
+                } else {
+                    $consolidatedMd += "`n*No API compatibility reports found*`n`n"
+                }
+                
+                $consolidatedMd += "`n## Version-Specific Compatibility Reports`n`n"
+                
+                # Process version-specific reports
+                if ($compatibilityReports.Count -gt 0) {
+                    foreach ($report in $compatibilityReports) {
+                        $version = $report.BaseName -replace "apicompat-", ""
+                        $consolidatedMd += "`n### Compatibility with v$version`n`n"
+                        $consolidatedMd += "``````text`n"
+                        $consolidatedMd += Get-Content $report.FullName -Raw
+                        $consolidatedMd += "`n```````n`n"
+                    }
+                } else {
+                    $consolidatedMd += "`n*No version-specific reports found*`n`n"
+                }
+                
+                # Add summary section
+                $consolidatedMd += @"
+                
+                ---
+                
+                ## Summary Statistics
+                
+                - **Total API Compat Reports:** $($apiCompatReports.Count)
+                - **Total Version Reports:** $($compatibilityReports.Count)
+                - **Pipeline Status:** $(if ($env:AGENT_JOBSTATUS -eq 'Succeeded') { '✅ Success' } else { '⚠️ Issues Found' })
+                
+                ## Tools Used
+                
+                - **Microsoft.DotNet.ApiCompat.Tool v8.0**
+                  - Binary API surface comparison
+                  - Breaking change detection
+                  - Semantic versioning validation
+                
+                ## Resources
+                
+                - [API Compatibility Documentation](https://github.com/dotnet/arcade/blob/main/Documentation/ApiCompat.md)
+                - [Compatibility Testing Guide](docs/compatibility-testing/)
+                - [API Changes Log](docs/compatibility-testing/API-CHANGES.md)
+                
+                ---
+                
+                *Generated by Azure DevOps Compatibility Testing Pipeline*
+                "@
+                
+                $consolidatedMdPath = "$reportDir/consolidated-compatibility-report.md"
+                $consolidatedMd | Out-File $consolidatedMdPath -Encoding UTF8
+                
+                Write-Host "✅ Consolidated report generated: $consolidatedMdPath" -ForegroundColor Green
+                
+                # Also create a simple text summary
+                $summaryPath = "$reportDir/summary.txt"
+                $summary = @"
+                Compatibility Testing Summary
+                ==============================
+                Build: $(Build.BuildNumber)
+                Branch: $(Build.SourceBranch)
+                Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+                
+                API Compat Reports: $($apiCompatReports.Count)
+                Version Reports: $($compatibilityReports.Count)
+                
+                Status: $(if ($env:AGENT_JOBSTATUS -eq 'Succeeded') { 'PASSED' } else { 'FAILED' })
+                
+                For detailed results, see the consolidated markdown report.
+                "@
+                
+                $summary | Out-File $summaryPath -Encoding UTF8
+                
+                Write-Host ""
+                Write-Host "Summary:"
+                Write-Host "  API Compat Reports: $($apiCompatReports.Count)"
+                Write-Host "  Version Reports: $($compatibilityReports.Count)"
+                Write-Host ""
+              pwsh: true
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Consolidated Report'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/ConsolidatedReport'
+              ArtifactName: 'ConsolidatedCompatibilityReport'
+              publishLocation: 'Container'
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish All Compatibility Results'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'CompatibilityResults'
+              publishLocation: 'Container'
+            condition: always()
+
+          - task: PowerShell@2
+            displayName: 'Generate Summary'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Write-Host "==================================" -ForegroundColor Cyan
+                Write-Host "Compatibility Testing Summary" -ForegroundColor Cyan
+                Write-Host "==================================" -ForegroundColor Cyan
+                Write-Host "Build: $(Build.BuildNumber)" -ForegroundColor Yellow
+                Write-Host "Branch: $(Build.SourceBranch)" -ForegroundColor Yellow
+                Write-Host "Reason: $(Build.Reason)" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "📊 Reports Published:" -ForegroundColor Cyan
+                Write-Host "  - API Compatibility Analysis (Microsoft.DotNet.ApiCompat.Tool)" -ForegroundColor Gray
+                Write-Host "  - Version-specific Compatibility Reports" -ForegroundColor Gray
+                Write-Host "  - Consolidated Summary Report" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "See artifacts for detailed compatibility analysis." -ForegroundColor Green
+                Write-Host "==================================" -ForegroundColor Cyan
+                Write-Host "Branch: $(Build.SourceBranch)" -ForegroundColor Yellow
+                Write-Host "Reason: $(Build.Reason)" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "See test results for details." -ForegroundColor Green
+                Write-Host "==================================" -ForegroundColor Cyan
