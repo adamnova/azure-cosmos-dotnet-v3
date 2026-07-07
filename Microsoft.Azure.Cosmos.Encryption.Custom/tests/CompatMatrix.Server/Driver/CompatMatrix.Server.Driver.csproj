@@ -15,4 +15,8 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Include="..\driver-shared\*.cs" />
+  </ItemGroup>
+
 </Project>

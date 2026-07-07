@@ -57,31 +57,49 @@ Any option that ships the tricky doc *through* its transport's serializer to dec
 
 ## 4. What was actually built + proven (empirical)
 
-### Option B — built and RUN GREEN against the live emulator
+Both long-lived-worker options (B and C) were built and share ONE **transport-agnostic** orchestrator
+(`driver-shared/MatrixRunner.cs` + `INode`): version-guard → emulator gate → write → cross-read grid
+→ exact-count → tamper. The two drivers differ ONLY in a ~90-line `INode` implementation
+(`HttpNode` vs `StdioNode`). This is the core finding: the matrix/assertions are independent of the
+transport, so choosing B vs C is purely a transport/ergonomics decision.
+
+### Option B — built and RUN GREEN against the live emulator (HTTP)
 `tests/CompatMatrix.Server/`:
 - `shim/MatrixCore.cs` — per-cell encrypt/decrypt/verify, **identical hardened doc + coverage** to
   PR #5986's `Program.cs`. Self-verifies (`VerifyDoc`) and returns only a **SHA-256 hash** of the
-  canonical signature — no decrypted field ever crosses HTTP (fidelity invariant honored).
-- `shim/Shim.cs` — minimal ASP.NET Core host: `GET /version`, `POST /init`, `POST /write`,
-  `POST /read`, `POST /tamper`. `/version` answers via reflection so the version-guard works even
-  with the emulator down.
+  canonical signature — no decrypted field ever crosses the wire (fidelity invariant honored).
+- `shim/Shim.cs` — minimal ASP.NET Core host: `GET /version`, `POST /init|/write|/read|/tamper`.
 - `shim/KeyProviders.cs` — reused verbatim (deterministic keys → a DEK made by one version yields
   identical key material to the other).
 - `Old/` (`Sdk.Web`, pins preview07), `New/` (pins preview01) — one binary per version.
-- `Driver/Driver.cs` — typed orchestrator: picks free ports, launches **both** servers at once,
-  health-checks + version-guards them, drives the full matrix over HTTP, prints the grid, returns
-  `0/1/3` exit codes. It is a direct re-expression of `run-matrix.ps1`.
+- `Driver/Driver.cs` — `HttpNode : INode` + a thin `Main` that hands nodes to `MatrixRunner`.
 
 **Result (Docker Linux emulator `http://127.0.0.1:8081`):**
 ```
-Versions: OLD=1.0.0-preview07 NEW=1.1.0-preview01
-PASS=42 FAIL=0
-TAMPER|old|PASS|plaintext-rejected  TAMPER|new|PASS|plaintext-rejected
-exit 0
+[thin-server / HTTP] Versions: OLD=1.0.0-preview07 NEW=1.1.0-preview01
+PASS=42 FAIL=0   TAMPER|old|PASS  TAMPER|new|PASS   exit 0
 ```
 Same **42 cells** as PR #5986's default `-Processor both`, same PASS, including cross-version
 (old↔new both directions), **real Stream DECRYPT** honored on reads, and the cross-processor A/B
 equivalence meta-cells (N-hash == S-hash == writer-hash). **B is functionally equivalent to A.**
+
+### Option C — built and RUN GREEN against the live emulator (stdio)
+Same `MatrixCore` + `KeyProviders` + `MatrixRunner`; the only new code is the host and the node:
+- `shim/Worker.cs` — an NDJSON stdio host (reads one JSON request per line from stdin, writes one
+  JSON response per line to stdout). No ASP.NET, no Kestrel, no port.
+- `OldWorker/`, `NewWorker/` — plain console (`Microsoft.NET.Sdk`) workers, one per version.
+- `DriverStdio/DriverStdio.cs` — `StdioNode : INode` (request/response over the worker's
+  stdin/stdout) + a thin `Main` that hands nodes to the SAME `MatrixRunner`.
+
+**Result (same emulator):**
+```
+[stdio worker / NDJSON] Versions: OLD=1.0.0-preview07 NEW=1.1.0-preview01
+PASS=42 FAIL=0   TAMPER|old|PASS  TAMPER|new|PASS   exit 0
+```
+Identical 42-cell PASS to A and B, with **less machinery** (no HTTP stack, no ports, no health-check
+polling — the first response IS readiness). NDJSON framing is trivial and the driver defensively
+skips any stray non-`{` stdout line. Because responses are hashes/status only, there are also **no
+encoding pitfalls** for the astral/surrogate payloads (they never enter the transport).
 
 ### Option D — coexistence probe (`AlcProbe/`, evidence only)
 Loaded both crypto DLLs into two `AssemblyLoadContext`s in one process:
@@ -102,7 +120,7 @@ run). For a test harness, isolation is a feature. **Not worth it.**
 
 | Criterion | A (subprocess/PS) | **B (ASP.NET server)** | C (stdio worker) | D (ALC) |
 |---|---|---|---|---|
-| Proven green here | (PR: PASS=42) | **yes, PASS=42** | design only | coexist-only |
+| Proven green here | (PR: PASS=42) | **yes, PASS=42** | **yes, PASS=42** | coexist-only |
 | Fidelity preserved | yes (stdout = status only) | **yes (hash only)** | yes (hash only) | yes (in-proc) |
 | Versions run at once | no (per-role respawn) | **yes** | yes | yes |
 | Matrix logic location | PowerShell | **typed C# driver** | typed C# driver | typed C#, +reflection |
@@ -123,26 +141,31 @@ run). For a test harness, isolation is a feature. **Not worth it.**
    better CI per-cell reporting) — which is the likely trajectory — then the **long-lived-version +
    typed-driver** shape is the better foundation, because it moves the matrix and its assertions out
    of a stdout-parsing PowerShell script into typed, debuggable code, and it lets versions run at
-   once. Two ways to get there:
-   - **B (thin ASP.NET server)** — validated here, standard + curl-debuggable HTTP contract, the
-     most natural path to a `dotnet test`-hosted harness (spin servers up in a fixture). Cost: an
-     ASP.NET dependency and 2 server lifecycles/ports to manage. **Recommended if we adopt the
-     server model.**
-   - **C (stdio/named-pipe worker)** — the same wins with less ceremony (no Kestrel/ports). Best if
-     we want the lightest possible long-lived-version harness and don't value HTTP's curl-ability.
+   once. Both proven-green options share the exact same `MatrixRunner`; pick a transport:
+   - **C (stdio/NDJSON worker)** — **my pick if we adopt the worker model.** Same 42-cell PASS as B
+     with the least machinery: no ASP.NET dependency, no Kestrel, no ports, no health-check polling.
+     The `INode` implementation is ~90 lines. It is the natural "spawn a process, talk to it" model.
+   - **B (thin ASP.NET server)** — choose over C only if you specifically want a standard,
+     curl-debuggable HTTP contract (e.g. to poke a version by hand, or reuse the shim outside the
+     harness). Costs an ASP.NET dependency and 2 server lifecycles/ports to manage.
 
 3. **Avoid D and E** for this harness: D sacrifices the process isolation that makes the test
-   trustworthy; E's container overhead isn't justified when process isolation already suffices.
+   trustworthy (probe: coexistence works, but every version-specific value must cross a reflection
+   boundary); E's container overhead isn't justified when process isolation already suffices.
 
-**My call:** the server model is a genuine, proven improvement in *maintainability and
-extensibility*, not correctness. If we're evolving the harness, go **B** (what was spiked) — or
-**C** if we want to shed the ASP.NET/port overhead. If we're not evolving it soon, **A stays**.
+**My call:** the worker model is a genuine, proven improvement in *maintainability and
+extensibility*, not correctness. If we're evolving the harness, go **C** (stdio) for the lightest
+footprint, or **B** (HTTP) if a curl-able contract earns its keep. If we're not evolving it soon,
+**A (PR #5986) stays** — it already passes and ships.
 
 ## 7. How to reproduce
 ```powershell
 # emulator (Docker Linux vnext-preview) on http://127.0.0.1:8081
 docker run -d --name cosmos-emu -p 8081:8081 mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview
 cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
-./run-server-matrix.ps1                 # build 2 shims + driver, run full matrix -> PASS=42, exit 0
-./run-server-matrix.ps1 -Processor Stream   # force single read processor (30 cells)
+./run-server-matrix.ps1 -Transport http    # Option B: ASP.NET shims + HTTP driver -> PASS=42
+./run-server-matrix.ps1 -Transport stdio   # Option C: stdio NDJSON workers        -> PASS=42
+./run-server-matrix.ps1 -Transport both    # run both back to back
+./run-server-matrix.ps1 -Transport stdio -Processor Stream   # force single read processor (30 cells)
+cd AlcProbe; dotnet run                     # Option D coexistence evidence
 ```

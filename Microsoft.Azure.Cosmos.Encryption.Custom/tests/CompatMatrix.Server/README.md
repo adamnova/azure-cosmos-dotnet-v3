@@ -1,54 +1,79 @@
-# CompatMatrix.Server — "thin server per version" spike (Option B)
+# CompatMatrix.Server — long-lived-worker compat-matrix spike (Options B & C)
 
 > **This is a design SPIKE** for PR #5986, not a shipping change. It explores running the
-> Encryption.Custom cross-version compat matrix as **one long-lived ASP.NET Core shim per package
-> version**, driven by a **typed C# driver** over HTTP, instead of the short-lived subprocess +
-> PowerShell-stdout harness in `tests/CompatMatrix/`. See **`EXPLORATION.md`** for the full
-> comparison of alternatives and the recommendation.
+> Encryption.Custom cross-version compat matrix as **one long-lived process per package version**,
+> driven by a **typed C# driver**, instead of the short-lived subprocess + PowerShell-stdout harness
+> in `tests/CompatMatrix/`. Two transports are prototyped and both run GREEN:
+> - **Option B — thin ASP.NET Core server** per version, driven over **HTTP**.
+> - **Option C — stdio NDJSON worker** per version, driven over **stdin/stdout** (no ASP.NET/ports).
+>
+> The matrix-driving logic is **transport-agnostic** (`driver-shared/MatrixRunner` + `INode`), so the
+> two drivers differ ONLY in a ~90-line node implementation. See **`EXPLORATION.md`** for the full
+> comparison of A/B/C/D/E and the recommendation.
 
-Both shims share **one Cosmos DB** and cross-read every write/read combination — same versions,
+Both transports share **one Cosmos DB** and cross-read every write/read combination — same versions,
 same hardened document, same 42-cell grid, same exit codes as `tests/CompatMatrix/run-matrix.ps1`.
-Proven **PASS=42, exit 0** against the Docker Linux emulator.
+Proven **PASS=42, exit 0** against the Docker Linux emulator (each transport).
 
-## Why a server (vs the subprocess harness)
-- The matrix + assertions become **typed C# in the driver**, not an ad-hoc `CELL|…|PASS` stdout
+## Why a long-lived worker (vs the subprocess harness)
+- The matrix + assertions become **typed C# in `MatrixRunner`**, not an ad-hoc `CELL|…|PASS` stdout
   parser in PowerShell.
-- Both versions run **at once** (no per-role process respawn); a cell is one HTTP round-trip.
-- The HTTP contract is a stable, **curl-debuggable** interop boundary and scales to N versions.
+- Both versions run **at once** (no per-role process respawn); a cell is one round-trip.
+- The transport is swappable behind `INode` (HTTP for a curl-able contract, stdio for zero ceremony).
 
 ## Fidelity invariant (why this is still a valid corruption test)
 The hardened doc is built, encrypted and **self-verified inside the version-owning process**. Only
-ids, selectors, status strings and a **SHA-256 signature hash** cross HTTP — never a decrypted field
-— so ASP.NET's serializer can neither sit in the fidelity path nor leak plaintext. `MatrixCore`'s
-`DecOk` (server-side `VerifyDoc`) is the per-cell PASS authority; the driver only compares hashes.
+ids, selectors, status strings and a **SHA-256 signature hash** cross the wire — never a decrypted
+field — so the transport's serializer can neither sit in the fidelity path nor leak plaintext.
+`MatrixCore.DecOk` (server-side `VerifyDoc`) is the per-cell PASS authority; the driver compares
+hashes only. (Bonus: because only hashes cross the wire, the astral/surrogate payloads never hit the
+transport encoder.)
 
 ## Layout
+Shared version-owning core (compiled into every per-version binary):
 - `shim/MatrixCore.cs` — per-cell encrypt/decrypt/verify; hardened doc + coverage identical to
   `tests/CompatMatrix/src/Program.cs`; returns signature **hashes** only.
-- `shim/Shim.cs` — minimal ASP.NET Core host: `GET /version`, `POST /init|/write|/read|/tamper`.
 - `shim/KeyProviders.cs` — reused verbatim (deterministic keys so DEKs interop across versions).
-- `Old/` — pins `1.0.0-preview07` (nuget.org) → `CompatMatrix.Server.Old.dll`.
-- `New/` — pins `1.1.0-preview01` (local-feed) → `CompatMatrix.Server.New.dll`.
-- `Driver/Driver.cs` — typed orchestrator (ports, launch, version-guard, matrix, grid, exit codes).
+
+Option B (HTTP):
+- `shim/Shim.cs` — minimal ASP.NET Core host: `GET /version`, `POST /init|/write|/read|/tamper`.
+- `Old/`, `New/` — `Sdk.Web` binaries pinning preview07 / preview01.
+- `Driver/Driver.cs` — `HttpNode : INode` + thin `Main`.
+
+Option C (stdio):
+- `shim/Worker.cs` — NDJSON stdio host (one JSON request/response per line).
+- `OldWorker/`, `NewWorker/` — console binaries pinning preview07 / preview01.
+- `DriverStdio/DriverStdio.cs` — `StdioNode : INode` + thin `Main`.
+
+Shared + support:
+- `driver-shared/INode.cs`, `driver-shared/MatrixRunner.cs` — the transport-agnostic orchestrator
+  (version-guard, emulator gate, write, cross-read grid, count, tamper, exit codes) used by BOTH drivers.
 - `AlcProbe/` — evidence for the single-process (Option D) analysis in `EXPLORATION.md`.
 - `nuget.config` — nuget.org + local-feed mapping (same as `tests/CompatMatrix/nuget.config`).
-- `run-server-matrix.ps1` — build the two shims + driver, run the matrix.
+- `run-server-matrix.ps1` — build + run either/both transports.
 
 ## Run
 ```powershell
 docker run -d --name cosmos-emu -p 8081:8081 `
   mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview
 cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
-./run-server-matrix.ps1                     # -> PASS=42, exit 0
-./run-server-matrix.ps1 -Processor Stream   # force a single read processor (30 cells)
+./run-server-matrix.ps1 -Transport http    # Option B -> PASS=42, exit 0
+./run-server-matrix.ps1 -Transport stdio   # Option C -> PASS=42, exit 0
+./run-server-matrix.ps1 -Transport both    # both, back to back
+./run-server-matrix.ps1 -Transport stdio -Processor Stream   # force a single read processor (30 cells)
 ```
 Exit: `0` all PASS · `1` data/version/count/tamper break · `3` emulator unreachable (skip, no hang).
 
-## HTTP contract (per shim)
-| Method | Route | Body/query | Returns |
+## Contracts
+**Option B — HTTP (per shim):**
+| Method | Route | Query | Returns |
 |---|---|---|---|
 | GET | `/version` | — | `{version, expected, informational, assemblyVersion}` (no Cosmos) |
-| POST | `/init` | — | `200` (Cosmos connected + DEKs created) or `503` |
+| POST | `/init` | — | `200` (Cosmos + DEKs) or `503` |
 | POST | `/write` | `?family=&wproc=&id=` | `{status, detail, expectedSignatureHash}` |
 | POST | `/read` | `?family=&rproc=&path=&id=` | `{rawOk, rawDetail, decOk, detail, signatureHash}` |
 | POST | `/tamper` | `?id=` | `{pass, detail}` |
+
+**Option C — stdio NDJSON (per worker):** one JSON request object per line on stdin, one JSON
+response per line on stdout. Ops: `version` · `init {endpoint,key,db}` · `write {family,wproc,id}` ·
+`read {family,rproc,path,id}` · `tamper {id}` · `shutdown`. Responses mirror the HTTP DTOs.
