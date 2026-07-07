@@ -43,11 +43,16 @@ Option B (HTTP):
 Option C (stdio):
 - `shim/Worker.cs` — NDJSON stdio host (one JSON request/response per line).
 - `OldWorker/`, `NewWorker/` — console binaries pinning preview07 / preview01.
-- `DriverStdio/DriverStdio.cs` — `StdioNode : INode` + thin `Main`.
+- `driver-shared/StdioNode.cs` — `StdioNode : INode` (shared by the console driver and the test harness).
+- `DriverStdio/DriverStdio.cs` — console driver (`MatrixRunner`: grid + exit codes).
+- `Tests/` — **MSTest per-cell harness**: one `dotnet test` case per cell (`CompatMatrixCellTests` +
+  `driver-shared/MatrixHarness`). 45 cases (39 cells + 3 equivalence + 2 tamper + 1 version guard);
+  self-skips (`Assert.Inconclusive`) when the emulator is unreachable.
 
 Shared + support:
-- `driver-shared/INode.cs`, `driver-shared/MatrixRunner.cs` — the transport-agnostic orchestrator
-  (version-guard, emulator gate, write, cross-read grid, count, tamper, exit codes) used by BOTH drivers.
+- `driver-shared/INode.cs`, `driver-shared/MatrixRunner.cs`, `driver-shared/MatrixHarness.cs` — the
+  transport-agnostic orchestrator (console grid + per-cell test primitives) used by BOTH drivers and
+  the `dotnet test` harness.
 - `AlcProbe/` — evidence for the single-process (Option D) analysis in `EXPLORATION.md`.
 - `nuget.config` — nuget.org + local-feed mapping (same as `tests/CompatMatrix/nuget.config`).
 - `run-server-matrix.ps1` — build + run either/both transports.
@@ -61,6 +66,11 @@ cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
 ./run-server-matrix.ps1 -Transport stdio   # Option C -> PASS=42, exit 0
 ./run-server-matrix.ps1 -Transport both    # both, back to back
 ./run-server-matrix.ps1 -Transport stdio -Processor Stream   # force a single read processor (30 cells)
+
+# Option C as a PROPER dotnet-test harness — one MSTest case per cell; skips cleanly with no emulator:
+dotnet test ./Tests/CompatMatrix.Server.Tests.csproj -c Release
+#   emulator up  -> Passed: 45  (39 cells + 3 equivalence + 2 tamper + 1 version guard)
+#   emulator down -> Skipped: 45 (Assert.Inconclusive), Failed: 0
 ```
 Exit: `0` all PASS · `1` data/version/count/tamper break · `3` emulator unreachable (skip, no hang).
 

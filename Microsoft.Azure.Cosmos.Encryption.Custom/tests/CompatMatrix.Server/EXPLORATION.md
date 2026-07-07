@@ -101,6 +101,14 @@ polling — the first response IS readiness). NDJSON framing is trivial and the 
 skips any stray non-`{` stdout line. Because responses are hashes/status only, there are also **no
 encoding pitfalls** for the astral/surrogate payloads (they never enter the transport).
 
+**Wired as a `dotnet test` harness** (`Tests/CompatMatrixCellTests.cs` + `driver-shared/MatrixHarness`):
+each matrix cell is its own MSTest case via `[DynamicData]`, so `dotnet test` gives **per-cell**
+PASS/FAIL reporting (e.g. `Cell_RoundTrips ("new","old","MDE","Stream","Newtonsoft","point")`).
+`[ClassInitialize]` launches the two stdio workers once; `[ClassCleanup]` disposes them; the workers
+are built via `ProjectReference ReferenceOutputAssembly="false"`. Result:
+- **emulator up → `Passed: 45`** (39 cells + 3 equivalence + 2 tamper + 1 version guard),
+- **emulator down → `Skipped: 45, Failed: 0`** (`Assert.Inconclusive`) — safe in non-emulator CI legs.
+
 ### Option D — coexistence probe (`AlcProbe/`, evidence only)
 Loaded both crypto DLLs into two `AssemblyLoadContext`s in one process:
 ```
@@ -157,6 +165,10 @@ run). For a test harness, isolation is a feature. **Not worth it.**
 extensibility*, not correctness. If we're evolving the harness, go **C** (stdio) for the lightest
 footprint, or **B** (HTTP) if a curl-able contract earns its keep. If we're not evolving it soon,
 **A (PR #5986) stays** — it already passes and ships.
+
+**Decision taken in this spike:** **C** was adopted and wired as a proper `dotnet test` harness
+(`Tests/`), turning each matrix cell into its own MSTest case with clean emulator-skip semantics. The
+console drivers (both transports) and the `AlcProbe` remain as comparison artifacts.
 
 ## 7. How to reproduce
 ```powershell
