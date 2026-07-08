@@ -3,7 +3,9 @@
   <!-- SPIKE (Option C) as a PROPER dotnet-test harness: each matrix cell is one MSTest case
        ([DynamicData]). Launches the two stdio workers once ([ClassInitialize]) and drives them via
        the shared StdioNode + MatrixHarness. Self-skips (Assert.Inconclusive) when the emulator is
-       unreachable, so it is safe in non-emulator CI legs. net8.0 only (Stream processor is net8-only). -->
+       unreachable, so it is safe in non-emulator CI legs. net8.0 only ON PURPOSE: the workers are
+       net8 (preview01 and the Stream processor are net8-only), so a net6 test host that merely
+       launches net8 workers adds no coverage (and needs no separately-installed net6 runtime). -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>

@@ -1,0 +1,72 @@
+# ------------------------------------------------------------
+# Copyright (c) Microsoft Corporation.  All rights reserved.
+# ------------------------------------------------------------
+# OPT-IN / MANUAL pipeline for the Encryption.Custom cross-version compat matrix (Option C: the
+# stdio-worker per-cell dotnet-test harness under tests/CompatMatrix.Server). It is deliberately NOT
+# wired into PR or CI triggers (trigger: none, pr: none) — register it as its own pipeline and run it
+# on demand, exactly as the sibling subprocess harness (tests/CompatMatrix/run-matrix.ps1) is manual.
+#
+# What it tests: CURRENT (the in-repo Encryption.Custom source, packed as 1.1.0-preview01) against OLD
+# (1.0.0-preview07 from nuget.org). The NEW node is built FROM SOURCE via `dotnet pack` into a temp
+# feed, and nuget.ci.config resolves the package from %COMPATMATRIX_FEED% — so CI needs NO checked-in
+# local feed. Uses the repo's Windows Cosmos emulator (templates/emulator-setup.yml, HTTPS on 8081);
+# the harness self-skips (Assert.Inconclusive) if the emulator is unreachable.
+#
+# GREEN-NESS: this leg passes only when the branch's source already contains the Stream-processor
+# data-corruption fixes. On a branch WITHOUT them the hardened Stream cells FAIL BY DESIGN (the
+# anti-fake-green control — see tests/CompatMatrix/RUN-REPORT.md §8), so it is regression infra that
+# turns green once the fixes are in the source under test (e.g. after they merge to main). To instead
+# test the SHIPPED package, point COMPATMATRIX_FEED at a feed that already has 1.1.0-preview01 and
+# drop the pack step.
+# ------------------------------------------------------------
+trigger: none
+pr: none
+
+parameters:
+  - name: BuildConfiguration
+    type: string
+    default: Release
+
+pool:
+  name: 'OneES'
+
+variables:
+  CompatFeed: $(Build.ArtifactStagingDirectory)/compat-feed
+  CompatMatrixDir: Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
+
+steps:
+  - checkout: self
+    clean: true
+
+  - task: UseDotNet@2
+    displayName: Use .NET 8.0 SDK
+    inputs:
+      packageType: sdk
+      version: 8.x
+
+  # Build the NEW/CURRENT node (in-repo source, versions to 1.1.0-preview01) into a temp feed — no
+  # local-feed needed. /p:IsPreview=true matches the shipped preview build configuration.
+  - task: DotNetCoreCLI@2
+    displayName: Pack Encryption.Custom source (CURRENT = 1.1.0-preview01)
+    inputs:
+      command: custom
+      custom: pack
+      arguments: 'Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj -c ${{ parameters.BuildConfiguration }} /p:IsPreview=true -o $(CompatFeed)'
+
+  # Windows Cosmos emulator (HTTPS on 8081), same setup the repo's emulator tests use.
+  - template: ../../../templates/emulator-setup.yml
+
+  # Per-cell harness: each cross-version matrix cell is its own MSTest case. Restores via nuget.ci.config,
+  # resolving NEW from the packed feed (%COMPATMATRIX_FEED%). Publishes per-cell results.
+  - task: DotNetCoreCLI@2
+    displayName: CompatMatrix.Server per-cell harness (Option C)
+    retryCountOnTaskFailure: 2
+    inputs:
+      command: test
+      projects: '$(CompatMatrixDir)/Tests/CompatMatrix.Server.Tests.csproj'
+      arguments: '-c ${{ parameters.BuildConfiguration }} /p:RestoreConfigFile=$(Build.SourcesDirectory)/$(CompatMatrixDir)/nuget.ci.config'
+      publishTestResults: true
+      testRunTitle: CompatMatrix.Server cross-version compat matrix
+    env:
+      COMPATMATRIX_FEED: $(CompatFeed)
+      COSMOS_ENDPOINT: https://127.0.0.1:8081/

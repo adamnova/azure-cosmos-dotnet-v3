@@ -54,8 +54,13 @@ Shared + support:
   transport-agnostic orchestrator (console grid + per-cell test primitives) used by BOTH drivers and
   the `dotnet test` harness.
 - `AlcProbe/` — evidence for the single-process (Option D) analysis in `EXPLORATION.md`.
-- `nuget.config` — nuget.org + local-feed mapping (same as `tests/CompatMatrix/nuget.config`).
+- `nuget.config` — nuget.org + local-feed mapping (dev). `nuget.ci.config` — CI variant that resolves
+  NEW from `%COMPATMATRIX_FEED%` (a pack-from-source feed) instead of the local feed.
 - `run-server-matrix.ps1` — build + run either/both transports.
+- `CompatMatrix.Server.sln` — standalone solution grouping all 8 projects (not in the main solution).
+- `azure-pipelines-compat-matrix.yml` — **opt-in** (`trigger: none`) CI leg: packs the in-repo source
+  as preview01 and runs the per-cell harness on the Windows emulator. See EXPLORATION.md §8 for why it
+  is opt-in and when it goes green.
 
 ## Run
 ```powershell

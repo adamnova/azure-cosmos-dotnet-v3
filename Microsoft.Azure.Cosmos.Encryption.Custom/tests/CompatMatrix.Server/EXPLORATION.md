@@ -181,3 +181,34 @@ cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
 ./run-server-matrix.ps1 -Transport stdio -Processor Stream   # force single read processor (30 cells)
 cd AlcProbe; dotnet run                     # Option D coexistence evidence
 ```
+
+## 8. CI integration — what's feasible, and the pack-from-source finding
+The matrix needs TWO packages: OLD = `1.0.0-preview07` (nuget.org) and NEW = `1.1.0-preview01`. The
+**fixed** preview01 exists only in the developer `local-feed` (built from the Stream-corruption-fixes
+branch); it is **not on any CI-accessible feed**. That is exactly why the sibling subprocess harness
+(`tests/CompatMatrix`) is a MANUAL script excluded from the solution — the standard CI restore
+(repo-root `NuGet.config`, no local-feed) can't get preview01. Two CI paths:
+
+- **Publish-then-restore (truthful, future):** once `1.1.0-preview01` is published to nuget.org or an
+  ADO artifact feed, a leg just restores it (drop the pack step; point `COMPATMATRIX_FEED` at that
+  feed). Tests the SHIPPED package; can auto-run and stay green.
+- **Pack-from-source (regression, now):** `azure-pipelines-compat-matrix.yml` (opt-in, `trigger: none`)
+  packs the in-repo source — which versions to `1.1.0-preview01` — into a temp feed and resolves NEW
+  from `%COMPATMATRIX_FEED%` via `nuget.ci.config`. No checked-in feed needed. This tests CURRENT
+  (HEAD source) ↔ OLD — a HEAD regression leg.
+
+**Validated locally (the plumbing):** `dotnet pack` → NEW restores `1.1.0-preview01` from the packed
+feed into a CLEAN packages dir (no local-feed, no cache) → the harness runs. **Finding:** packing
+*this* branch's source yields an **unfixed** preview01, so the hardened **Stream** cells FAIL with the
+exact RUN-REPORT §8 signature — `PlainEscaped got 'p_q=\" p_b=\\ …' want 'p_q=" p_b=\ …'` (Stream
+plaintext double-escape) — while Newtonsoft/AEAD cells pass (**24 fail / 21 pass**). That is the
+anti-fake-green control working, and a demonstration that the per-cell harness **pinpoints the exact
+failing field and cell**. The leg turns fully green once the Stream fixes are in the source under test
+(e.g. after they merge to main). The dev run is green because there NEW = the *fixed* local-feed
+preview01.
+
+## 9. Build/run as a unit
+`CompatMatrix.Server.sln` groups all 8 projects (shims, workers, drivers, test, probe) so
+`dotnet build CompatMatrix.Server.sln` / `dotnet test` work as one unit. It is a standalone solution
+(not added to `Microsoft.Azure.Cosmos.sln`, matching the isolated `tests/CompatMatrix` pattern),
+because the preview01 dependency is not restorable from the repo-root feed.
