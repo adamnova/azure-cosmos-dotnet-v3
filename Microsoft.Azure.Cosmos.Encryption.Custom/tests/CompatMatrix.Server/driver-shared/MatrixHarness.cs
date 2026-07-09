@@ -13,6 +13,8 @@ public sealed class MatrixHarness : IDisposable
 {
     private readonly IReadOnlyList<INode> nodes;
     private readonly Dictionary<string, string> expectedHash = new();
+    private readonly Dictionary<string, WriteInfo> writeById = new();
+    private readonly List<(string writer, string family, string wproc, WriteInfo info)> writes = new();
 
     public MatrixHarness(IReadOnlyList<INode> nodes) => this.nodes = nodes;
 
@@ -21,6 +23,9 @@ public sealed class MatrixHarness : IDisposable
     public string? FatalError { get; private set; }
 
     public bool Ready => this.SkipReason is null && this.FatalError is null;
+
+    // The write-phase results (for the console WROTE| output and root-cause attribution on read failures).
+    public IReadOnlyList<(string writer, string family, string wproc, WriteInfo info)> Writes => this.writes;
 
     // Launch all workers at once, version-guard, init (emulator gate), then write every cell once.
     public async Task StartAsync(string endpoint, string key, string db, string toggle)
@@ -55,18 +60,27 @@ public sealed class MatrixHarness : IDisposable
                 string id = $"cell-{family}-{wproc}-by-{writer.Name}";
                 WriteInfo w = await writer.WriteAsync(family, wproc, id);
                 this.expectedHash[id] = w.ExpectedSignatureHash;
+                this.writeById[id] = w;
+                this.writes.Add((writer.Name, family, wproc, w));
                 if (w.Status == "UNSUPPORTED-DID-NOT-THROW") { this.FatalError = $"WRITE BREAK: AEAD+Stream did not throw on a Stream-capable version ({id})."; return; }
             }
         }
     }
 
-    // One read cell: raw-ciphertext verdict AND decrypted self-verify (server-side VerifyDoc).
+    // One read cell: raw-ciphertext verdict AND decrypted self-verify (server-side VerifyDoc + number-integrity).
     public async Task<(bool pass, string detail)> ReadCellAsync(string writer, string reader, string family, string wproc, string rproc, string path)
     {
         string id = $"cell-{family}-{wproc}-by-{writer}";
         ReadInfo r = await this.Node(reader).ReadAsync(family, rproc, path, id);
         bool pass = r.RawOk && r.DecOk;
-        return (pass, pass ? r.RawDetail : (!r.RawOk ? $"raw:{r.RawDetail}" : r.Detail));
+        string detail = pass ? r.RawDetail : (!r.RawOk ? $"raw:{r.RawDetail}" : r.Detail);
+        // Root-cause attribution: if this id's WRITE failed, a broken write otherwise surfaces misleadingly
+        // as raw-not-found on the read path — so prefix the writer's failure (see review finding #3).
+        if (!pass && this.writeById.TryGetValue(id, out WriteInfo? w) && w.Status == "FAIL")
+        {
+            detail = $"WRITE-FAILED[{w.Detail}] -> {detail}";
+        }
+        return (pass, detail);
     }
 
     // Cross-processor A/B equivalence: the SAME _ei doc must decrypt IDENTICALLY under Newtonsoft AND
@@ -121,8 +135,11 @@ public sealed class MatrixHarness : IDisposable
         }
     }
 
-    // The 39 supported read cells (writer, reader, family, wproc, rproc, path) at -Processor both.
-    public static IEnumerable<object[]> ReadCells()
+    // The 39 supported read cells at -Processor both (parameterless form is the MSTest [DynamicData] source).
+    public static IEnumerable<object[]> ReadCells() => ReadCellsFor("both");
+
+    // Toggle-aware read-cell enumeration, shared with the console MatrixRunner (single source of the grid).
+    public static IEnumerable<object[]> ReadCellsFor(string toggle)
     {
         foreach (string reader in Versions)
         {
@@ -132,7 +149,7 @@ public sealed class MatrixHarness : IDisposable
                 {
                     if (family == "AEAD" && wproc == "Stream") { continue; }
                     if (wproc == "Stream" && writer == "old") { continue; }
-                    foreach (string rproc in ReadProcessors(family, reader, "both"))
+                    foreach (string rproc in ReadProcessors(family, reader, toggle))
                     {
                         foreach (string path in new[] { "point", "query", "feed" })
                         {
@@ -144,8 +161,11 @@ public sealed class MatrixHarness : IDisposable
         }
     }
 
-    // The 3 cross-processor equivalence cells (writer, reader, family, wproc): reader reads BOTH N and S.
-    public static IEnumerable<object[]> EquivCells()
+    // The 3 cross-processor equivalence cells at -Processor both (parameterless form is the [DynamicData] source).
+    public static IEnumerable<object[]> EquivCells() => EquivCellsFor("both");
+
+    // reader reads BOTH N and S — so only present at -Processor both (single-processor toggles have no equivalence).
+    public static IEnumerable<object[]> EquivCellsFor(string toggle)
     {
         foreach (string reader in Versions)
         {
@@ -155,7 +175,7 @@ public sealed class MatrixHarness : IDisposable
                 {
                     if (family != "MDE") { continue; }
                     if (wproc == "Stream" && writer == "old") { continue; }
-                    List<string> procs = ReadProcessors(family, reader, "both").ToList();
+                    List<string> procs = ReadProcessors(family, reader, toggle).ToList();
                     if (procs.Contains("Newtonsoft") && procs.Contains("Stream"))
                     {
                         yield return new object[] { writer, reader, family, wproc };

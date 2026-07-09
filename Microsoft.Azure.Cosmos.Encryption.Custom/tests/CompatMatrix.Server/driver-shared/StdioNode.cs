@@ -13,6 +13,7 @@ using System.Text.Json;
 public sealed class StdioNode : INode
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
+    private static readonly TimeSpan DefaultRpcTimeout = TimeSpan.FromSeconds(120);
 
     public string Name { get; }
     public string Expected { get; }
@@ -56,17 +57,17 @@ public sealed class StdioNode : INode
 
     public async Task<VersionInfo?> WaitVersionAsync(TimeSpan timeout)
     {
-        Task<VersionInfo> t = this.RpcAsync<VersionInfo>(new { op = "version" });
-        Task done = await Task.WhenAny(t, Task.Delay(timeout));
-        if (done != t) { return null; }
-        try { return await t; } catch { return null; }
+        try { return await this.RpcAsync<VersionInfo>(new { op = "version" }, timeout); }
+        catch { return null; }
     }
 
     public async Task<(bool ok, string detail)> InitAsync()
     {
         try
         {
-            InitReply r = await this.RpcAsync<InitReply>(new { op = "init", endpoint = this.endpoint, key = this.key, db = this.db });
+            // init replies with {Ok, Error}, which legitimately carries an "Error" field — so the
+            // error-envelope check is disabled here (see RpcAsync) to avoid misreading a normal reply.
+            InitReply r = await this.RpcAsync<InitReply>(new { op = "init", endpoint = this.endpoint, key = this.key, db = this.db }, checkErrorEnvelope: false);
             return (r.Ok, r.Error ?? "ok");
         }
         catch (Exception ex) { return (false, $"{ex.GetType().Name}: {ex.Message.Split('\n')[0]}"); }
@@ -81,25 +82,47 @@ public sealed class StdioNode : INode
     public Task<TamperInfo> TamperAsync(string id)
         => this.RpcAsync<TamperInfo>(new { op = "tamper", id });
 
-    private async Task<T> RpcAsync<T>(object request)
+    // Every RPC is bounded by a timeout (default 120s), so a hung worker fails THIS cell with a clear
+    // TimeoutException instead of hanging the whole run until the CI job timeout. On timeout the gate
+    // is released by the finally (the read is cancelled first), so no semaphore leak.
+    private async Task<T> RpcAsync<T>(object request, TimeSpan? timeout = null, bool checkErrorEnvelope = true)
     {
         await this.gate.WaitAsync();
+        using CancellationTokenSource cts = new(timeout ?? DefaultRpcTimeout);
         try
         {
             await this.toWorker!.WriteLineAsync(JsonSerializer.Serialize(request, Json));
             await this.toWorker.FlushAsync();
-            string line = await this.ReadJsonLineAsync();
+            string line = await this.ReadJsonLineAsync(cts.Token);
+
+            // #2: a worker-side failure comes back as the {Error:...} envelope. Deserializing that into a
+            // typed result record would silently default-fill it (RawOk=false, Status=null, ...) and drop
+            // the root cause. Detect it and surface the worker's message instead.
+            if (checkErrorEnvelope)
+            {
+                using JsonDocument probe = JsonDocument.Parse(line);
+                if (probe.RootElement.ValueKind == JsonValueKind.Object &&
+                    (probe.RootElement.TryGetProperty("Error", out JsonElement e) || probe.RootElement.TryGetProperty("error", out e)))
+                {
+                    throw new InvalidOperationException($"{this.Name} worker error: {e.GetString()}");
+                }
+            }
+
             return JsonSerializer.Deserialize<T>(line, Json)!;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"{this.Name} worker did not respond within {(timeout ?? DefaultRpcTimeout).TotalSeconds:0}s.");
         }
         finally { this.gate.Release(); }
     }
 
     // Read the next JSON-object line, skipping any stray non-JSON output (defensive against a
     // dependency accidentally writing to stdout — keeps the NDJSON framing robust).
-    private async Task<string> ReadJsonLineAsync()
+    private async Task<string> ReadJsonLineAsync(CancellationToken ct)
     {
         string? line;
-        while ((line = await this.fromWorker!.ReadLineAsync()) != null)
+        while ((line = await this.fromWorker!.ReadLineAsync(ct)) != null)
         {
             line = line.Trim();
             if (line.StartsWith('{')) { return line; }

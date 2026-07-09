@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Azure.Cosmos.Encryption.Custom" Version="[1.0.0-preview07]" />
+    <PackageReference Include="Microsoft.Azure.Cosmos.Encryption.Custom" Version="[$(CompatMatrixOldVersion)]" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 

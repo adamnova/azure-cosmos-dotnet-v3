@@ -1,114 +1,62 @@
 // ------------------------------------------------------------
 // Copyright (c) Microsoft Corporation.  All rights reserved.
 // ------------------------------------------------------------
-// SPIKE shared orchestration: identical to run-matrix.ps1's flow (version-guard -> emulator gate ->
-// write -> cross read grid -> count -> tamper), but expressed once and reused by BOTH the HTTP
-// (Option B) and stdio (Option C) drivers through INode. Exit codes: 0 pass / 1 break / 3 skip.
+// SPIKE shared console orchestration for BOTH the HTTP (Option B) and stdio (Option C) drivers.
+// It is a THIN wrapper over MatrixHarness: the harness owns the version-guard, emulator gate, write
+// phase, the cell enumerations (Cells/ReadProcessors/Read+EquivCells) and the per-cell operations —
+// so the console grid and the `dotnet test` harness test the EXACT SAME matrix (no duplicated grid
+// definition that could silently diverge). This runner only formats the grid and maps to exit codes:
+//   0 = all PASS · 1 = data/version/count/tamper break · 3 = emulator unreachable (skip).
 namespace CompatMatrix.Server.Harness;
 
 public static class MatrixRunner
 {
     public static async Task<int> RunAsync(IReadOnlyList<INode> nodes, string endpoint, string key, string db, string toggle, string transportLabel)
     {
+        MatrixHarness harness = new(nodes);
         try
         {
-            // ---- Launch all version workers AT ONCE and health-check (works even if the emulator is down) ----
-            foreach (INode n in nodes) { n.Launch(endpoint, key, db); }
-            foreach (INode n in nodes)
-            {
-                VersionInfo? v = await n.WaitVersionAsync(TimeSpan.FromSeconds(40));
-                if (v is null) { Console.Error.WriteLine($"{n.Name}: worker did not answer version."); return 1; }
-                n.Version = v;
-            }
+            // Launch all workers at once, version-guard, emulator gate, write every cell (all in the harness).
+            await harness.StartAsync(endpoint, key, db, toggle);
 
-            // ---- Version guard: exact expected versions AND the two must differ (anti-fake-green) ----
-            foreach (INode n in nodes)
+            if (harness.SkipReason is not null)
             {
-                if (n.Version!.Informational != n.Expected)
-                {
-                    Console.Error.WriteLine($"VERSION BREAK: {n.Name} loaded '{n.Version.Informational}', expected '{n.Expected}'.");
-                    return 1;
-                }
+                Console.WriteLine($"SKIP: {harness.SkipReason} Start the emulator, e.g.:");
+                Console.WriteLine("  docker run -d --name cosmos-emu -p 8081:8081 mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview");
+                return 3;
             }
-            if (nodes.Select(n => n.Version!.Informational).Distinct().Count() != nodes.Count)
+            if (harness.FatalError is not null)
             {
-                Console.Error.WriteLine("VERSION BREAK: the workers must load DIFFERENT Encryption.Custom versions.");
+                Console.Error.WriteLine(harness.FatalError);
                 return 1;
             }
+
             Console.WriteLine($"[{transportLabel}] Versions: " + string.Join(" ", nodes.Select(n => $"{n.Name.ToUpperInvariant()}={n.Version!.Informational}")));
-
-            // ---- Emulator gate: init connects to Cosmos + creates the DEKs. Unreachable => skip (exit 3) ----
-            foreach (INode n in nodes)
-            {
-                (bool ok, string detail) = await n.InitAsync();
-                if (!ok)
-                {
-                    Console.WriteLine($"SKIP: Cosmos emulator not reachable for {n.Name} ({detail}). Start it, e.g.:");
-                    Console.WriteLine("  docker run -d --name cosmos-emu -p 8081:8081 mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview");
-                    return 3;
-                }
-            }
             Console.WriteLine($"[{transportLabel}] Emulator: {endpoint}  DB: {db}  Processor: {toggle}");
-
-            // ---- Write phase: every node writes every cell into the shared DB (state shared via Cosmos) ----
-            Dictionary<string, string> expectedHash = new();
-            List<string> didNotThrow = new();
-            foreach (INode writer in nodes)
+            foreach ((string writer, string family, string wproc, WriteInfo info) in harness.Writes)
             {
-                foreach ((string family, string wproc) in Cells())
-                {
-                    string id = $"cell-{family}-{wproc}-by-{writer.Name}";
-                    WriteInfo w = await writer.WriteAsync(family, wproc, id);
-                    expectedHash[id] = w.ExpectedSignatureHash;
-                    Console.WriteLine($"WROTE|{writer.Name}|{family}|{wproc}|{w.Status}|{w.Detail}");
-                    if (w.Status == "UNSUPPORTED-DID-NOT-THROW") { didNotThrow.Add(id); }
-                }
-            }
-            if (didNotThrow.Count > 0)
-            {
-                Console.Error.WriteLine("WRITE BREAK: AEAD+Stream did not throw on a Stream-capable version: " + string.Join(", ", didNotThrow));
-                return 1;
+                Console.WriteLine($"WROTE|{writer}|{family}|{wproc}|{info.Status}|{info.Detail}");
             }
 
-            // ---- Read phase: cross every reader x writer, honoring the read-proc override (real Stream DECRYPT),
-            //      across point/query/feed, then a cross-processor A/B equivalence meta-cell. ----
+            // Read grid — driven by the SAME enumerations + per-cell ops the dotnet-test harness uses.
             List<GridRow> grid = new();
-            foreach (INode reader in nodes)
+            foreach (object[] c in MatrixHarness.ReadCellsFor(toggle))
             {
-                foreach (INode writer in nodes)
-                {
-                    foreach ((string family, string wproc) in Cells())
-                    {
-                        if (family == "AEAD" && wproc == "Stream") { continue; }   // unsupported-by-design
-                        if (wproc == "Stream" && writer.Name == "old") { continue; } // preview07 never produced a stream-written doc
-                        string id = $"cell-{family}-{wproc}-by-{writer.Name}";
-                        Dictionary<string, string> hashByProc = new();
-
-                        foreach (string rproc in ReadProcessors(family, reader.Name, toggle))
-                        {
-                            foreach (string path in new[] { "point", "query", "feed" })
-                            {
-                                ReadInfo r = await reader.ReadAsync(family, rproc, path, id);
-                                bool cellPass = r.RawOk && r.DecOk;
-                                string msg = cellPass ? r.RawDetail : (!r.RawOk ? $"raw:{r.RawDetail}" : r.Detail);
-                                grid.Add(new GridRow($"{writer.Name}-write", $"{reader.Name}-read", family, $"{wproc}->{rproc}", path, cellPass ? "PASS" : "FAIL", msg));
-                                if (cellPass) { hashByProc[rproc] = r.SignatureHash; }
-                            }
-                        }
-
-                        if (hashByProc.TryGetValue("Newtonsoft", out string? hN) && hashByProc.TryGetValue("Stream", out string? hS))
-                        {
-                            bool eq = hN == hS && hN == expectedHash.GetValueOrDefault(id);
-                            grid.Add(new GridRow($"{writer.Name}-write", $"{reader.Name}-read", family, $"{wproc}->A/B", "equiv", eq ? "PASS" : "FAIL", eq ? "N==S (full doc interchangeable)" : "N/S/expected hash mismatch"));
-                        }
-                    }
-                }
+                string writer = (string)c[0], reader = (string)c[1], family = (string)c[2], wproc = (string)c[3], rproc = (string)c[4], path = (string)c[5];
+                (bool pass, string detail) = await harness.ReadCellAsync(writer, reader, family, wproc, rproc, path);
+                grid.Add(new GridRow($"{writer}-write", $"{reader}-read", family, $"{wproc}->{rproc}", path, pass ? "PASS" : "FAIL", detail));
+            }
+            foreach (object[] c in MatrixHarness.EquivCellsFor(toggle))
+            {
+                string writer = (string)c[0], reader = (string)c[1], family = (string)c[2], wproc = (string)c[3];
+                (bool pass, string detail) = await harness.EquivalenceAsync(writer, reader, family, wproc);
+                grid.Add(new GridRow($"{writer}-write", $"{reader}-read", family, $"{wproc}->A/B", "equiv", pass ? "PASS" : "FAIL", detail));
             }
 
             PrintGrid(grid, transportLabel);
-            int pass = grid.Count(g => g.Status == "PASS");
+            int passCount = grid.Count(g => g.Status == "PASS");
             List<GridRow> fails = grid.Where(g => g.Status != "PASS").ToList();
-            Console.WriteLine($"PASS={pass} FAIL={fails.Count}");
+            Console.WriteLine($"PASS={passCount} FAIL={fails.Count}");
             if (fails.Count > 0)
             {
                 Console.Error.WriteLine("DATA BREAK:");
@@ -125,9 +73,9 @@ public static class MatrixRunner
 
             foreach (INode n in nodes)
             {
-                TamperInfo t = await n.TamperAsync($"cell-MDE-Newtonsoft-tamper-by-{n.Name}");
-                Console.WriteLine($"TAMPER|{n.Name}|{(t.Pass ? "PASS" : "FAIL")}|{t.Detail}");
-                if (!t.Pass) { Console.Error.WriteLine("GUARD BREAK: plaintext doc accepted as encrypted."); return 1; }
+                (bool pass, string detail) = await harness.TamperAsync(n.Name);
+                Console.WriteLine($"TAMPER|{n.Name}|{(pass ? "PASS" : "FAIL")}|{detail}");
+                if (!pass) { Console.Error.WriteLine("GUARD BREAK: plaintext doc accepted as encrypted."); return 1; }
             }
 
             Console.WriteLine($"[{transportLabel}] All cross-version cells PASS (no data break); plaintext rejected.");
@@ -135,27 +83,7 @@ public static class MatrixRunner
         }
         finally
         {
-            foreach (INode n in nodes) { n.Dispose(); }
-        }
-    }
-
-    private static IEnumerable<(string family, string wproc)> Cells()
-    {
-        yield return ("MDE", "Newtonsoft");
-        yield return ("MDE", "Stream");
-        yield return ("AEAD", "Newtonsoft");
-        yield return ("AEAD", "Stream"); // unsupported-by-design: asserted to throw on write
-    }
-
-    private static IEnumerable<string> ReadProcessors(string family, string readerName, string toggle)
-    {
-        if (family == "AEAD") { yield return "Newtonsoft"; yield break; }
-        bool readerSupportsStream = readerName != "old";
-        switch (toggle)
-        {
-            case "newtonsoft": yield return "Newtonsoft"; break;
-            case "stream": yield return readerSupportsStream ? "Stream" : "Newtonsoft"; break;
-            default: yield return "Newtonsoft"; if (readerSupportsStream) { yield return "Stream"; } break;
+            harness.Dispose();
         }
     }
 

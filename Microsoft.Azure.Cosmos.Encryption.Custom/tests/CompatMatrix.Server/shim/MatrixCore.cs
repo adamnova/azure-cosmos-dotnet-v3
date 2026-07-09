@@ -127,16 +127,29 @@ namespace CompatMatrix.Server
         }
 
         // Reads ONE cell via one {rproc, path}. Returns the raw-ciphertext verdict, the decrypted self-verify
-        // verdict (VerifyDoc against this process's own BuildDoc(id)), and the canonical signature of the
-        // decrypted doc (for the driver's cross-processor A/B equivalence check).
+        // verdict (VerifyDoc against this process's own BuildDoc(id)) PLUS a number-integrity check, and a
+        // SHA-256 hash of the decrypted doc's canonical signature (for the driver's A/B equivalence check).
         public static async Task<ReadResult> ReadAsync(string family, string rproc, string path, string id)
         {
             string expectedPlain = $"secret::{id}";
             (bool rawOk, string rawDetail) = await RawIsEncrypted(id, family, expectedPlain);
             try
             {
-                Doc r = await ReadPath(path, id, rproc);
+                JObject jr = await ReadPath(path, id, rproc);
+                Doc r = jr?.ToObject<Doc>();
                 (bool decOk, string vdetail) = VerifyDoc(r, id);
+
+                // Number-integrity on the DECRYPTED wire form: each encrypted numeric path must decrypt back to
+                // a NUMERIC token, not a stringified/nulled value that a typed long/double would silently coerce
+                // and hide. Integer-vs-Float is intentionally NOT asserted: System.Text.Json emits an integral
+                // double like 5.0 as "5" and Newtonsoft as "5.0" — both correct and value-equal (see
+                // tests/CompatMatrix/RUN-REPORT.md §7) — so a wire-form check would false-fail the Stream path.
+                if (decOk && jr != null)
+                {
+                    (bool numOk, string numDetail) = NumbersAreNumeric(jr);
+                    if (!numOk) { decOk = false; vdetail = numDetail; }
+                }
+
                 return new ReadResult(rawOk, rawDetail, decOk, decOk ? "all-fields-match" : vdetail, r == null ? "<null-doc>" : Sha256Hex(Signature(r)));
             }
             catch (Exception ex)
@@ -189,22 +202,38 @@ namespace CompatMatrix.Server
             return (true, $"cipher+v{ver}");
         }
 
-        private static async Task<Doc> ReadPath(string path, string id, string rproc)
+        private static async Task<JObject> ReadPath(string path, string id, string rproc)
         {
             if (path == "point")
             {
-                try { return (await enc.ReadItemAsync<Doc>(id, new PartitionKey(Pk), WithProcessor(new ItemRequestOptions(), rproc))).Resource; }
+                try { return (await enc.ReadItemAsync<JObject>(id, new PartitionKey(Pk), WithProcessor(new ItemRequestOptions(), rproc))).Resource; }
                 catch (CosmosException e) when (e.StatusCode == HttpStatusCode.NotFound) { return null; }
             }
             string q = path == "query" ? "SELECT * FROM c WHERE c.id = @id" : "SELECT * FROM c";
             QueryDefinition qd = new(q);
             if (path == "query") { qd = qd.WithParameter("@id", id); }
-            using FeedIterator<Doc> it = enc.GetItemQueryIterator<Doc>(qd, requestOptions: WithProcessor(new QueryRequestOptions { PartitionKey = new PartitionKey(Pk) }, rproc));
+            using FeedIterator<JObject> it = enc.GetItemQueryIterator<JObject>(qd, requestOptions: WithProcessor(new QueryRequestOptions { PartitionKey = new PartitionKey(Pk) }, rproc));
             while (it.HasMoreResults)
             {
-                foreach (Doc d in await it.ReadNextAsync()) { if (d.id == id) { return d; } }
+                foreach (JObject d in await it.ReadNextAsync()) { if (d.Value<string>("id") == id) { return d; } }
             }
             return null;
+        }
+
+        // Anti-fake-green number-integrity: a decrypted numeric path must be a numeric JSON token. A value
+        // that decrypts as a string ("5") or null would round-trip through the typed Doc.EncLong/double fields
+        // undetected (coerced back to a number), so the typed field comparison alone cannot see it.
+        private static (bool ok, string detail) NumbersAreNumeric(JObject j)
+        {
+            foreach (string field in new[] { "EncLong", "EncIntegralDouble", "EncNormalDouble" })
+            {
+                JToken t = j[field];
+                if (t == null || (t.Type != JTokenType.Integer && t.Type != JTokenType.Float))
+                {
+                    return (false, $"{field} decrypted as {(t == null ? "<missing>" : t.Type.ToString())} (want numeric)");
+                }
+            }
+            return (true, "numeric");
         }
 
         private static EncryptionItemRequestOptions Options(string algo, string proc)

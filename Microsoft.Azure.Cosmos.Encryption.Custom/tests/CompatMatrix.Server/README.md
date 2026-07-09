@@ -92,3 +92,20 @@ Exit: `0` all PASS · `1` data/version/count/tamper break · `3` emulator unreac
 **Option C — stdio NDJSON (per worker):** one JSON request object per line on stdin, one JSON
 response per line on stdout. Ops: `version` · `init {endpoint,key,db}` · `write {family,wproc,id}` ·
 `read {family,rproc,path,id}` · `tamper {id}` · `shutdown`. Responses mirror the HTTP DTOs.
+
+## Version pin & retarget
+The two package versions are pinned once in `Directory.Build.props` (`CompatMatrixOldVersion` =
+`1.0.0-preview07`, `CompatMatrixNewVersion` = `1.1.0-preview01`) and flow into all four package
+references. **These must stay equal to** the C# version-guard constants — `MatrixCore.ExpectedPackageVersion`
+(`#if CEC_NEW`) and the node `Expected` strings in `Driver.cs` / `DriverStdio.cs` / `CompatMatrixCellTests.cs` —
+and, for the CI pack-from-source leg, to the repo-root `<CustomEncryptionVersion>`.
+
+**Retarget-to-main ordering:** `CompatMatrixNewVersion` (`1.1.0-preview01`) is the *next* release; `main`
+is behind. When retargeting this stacked PR to `main`, the `<CustomEncryptionVersion>` bump to
+`1.1.0-preview01` must land **first** — otherwise the `[1.1.0-preview01]` restore fails (dev) or the
+pack-from-source produces a differently-versioned package and the version guard trips (CI).
+
+## Notes
+- Each run uses a fresh GUID database (`compat-matrix-*`); repeated local runs accumulate DBs on the
+  emulator (2 containers × 400 RU each). The emulator is ephemeral, so this is only a local-tidiness
+  note; a future best-effort drop-database on dispose would require a new worker op.
