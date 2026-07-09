@@ -26,6 +26,7 @@ public sealed class StdioNode : INode
     private Process? proc;
     private StreamWriter? toWorker;
     private StreamReader? fromWorker;
+    private bool faulted;
 
     public StdioNode(string name, string dll, string expected)
     {
@@ -87,6 +88,10 @@ public sealed class StdioNode : INode
     // is released by the finally (the read is cancelled first), so no semaphore leak.
     private async Task<T> RpcAsync<T>(object request, TimeSpan? timeout = null, bool checkErrorEnvelope = true)
     {
+        // After a timeout the abandoned ReadLineAsync may still consume the worker's late line out of band,
+        // so the stdout stream is no longer safe to reuse — fail fast on any further RPC to this node rather
+        // than risk a desynced (mismatched) response. (A "promote to real harness" step could relaunch instead.)
+        if (this.faulted) { throw new InvalidOperationException($"{this.Name} worker is faulted (a prior RPC timed out; its stdio stream is no longer safe to reuse)."); }
         await this.gate.WaitAsync();
         using CancellationTokenSource cts = new(timeout ?? DefaultRpcTimeout);
         try
@@ -112,6 +117,7 @@ public sealed class StdioNode : INode
         }
         catch (OperationCanceledException)
         {
+            this.faulted = true;
             throw new TimeoutException($"{this.Name} worker did not respond within {(timeout ?? DefaultRpcTimeout).TotalSeconds:0}s.");
         }
         finally { this.gate.Release(); }
