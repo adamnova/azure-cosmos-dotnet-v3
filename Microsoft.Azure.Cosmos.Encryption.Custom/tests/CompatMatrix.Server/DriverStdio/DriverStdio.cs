@@ -33,8 +33,8 @@ internal static class Program
 
         List<INode> nodes = new()
         {
-            new StdioNode("old", oldDll, "1.0.0-preview07"),
-            new StdioNode("new", newDll, "1.1.0-preview01"),
+            new StdioNode("old", oldDll, ConfiguredVersions.Old),
+            new StdioNode("new", newDll, ConfiguredVersions.New),
         };
         return await MatrixRunner.RunAsync(nodes, endpoint, key, db, toggle, "stdio worker / NDJSON");
     }

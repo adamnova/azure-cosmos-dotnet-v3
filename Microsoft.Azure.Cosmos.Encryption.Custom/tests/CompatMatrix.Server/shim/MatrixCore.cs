@@ -33,13 +33,13 @@ namespace CompatMatrix.Server
     {
 #if CEC_CURRENT
         public const string Version = "current";
-        private const string ExpectedPackageVersion = "1.1.0-preview01";
+        private const string ExpectedPackageVersionKey = "CompatMatrixNewVersion";
 #elif CEC_NEW
         public const string Version = "new";
-        private const string ExpectedPackageVersion = "1.1.0-preview01";
+        private const string ExpectedPackageVersionKey = "CompatMatrixNewVersion";
 #else
         public const string Version = "old";
-        private const string ExpectedPackageVersion = "1.0.0-preview07";
+        private const string ExpectedPackageVersionKey = "CompatMatrixOldVersion";
 #endif
         private const string StreamKey = "encryption-json-processor";
         private const string MdeDekId = "matrix-mde-dek";
@@ -93,7 +93,30 @@ namespace CompatMatrix.Server
             Assembly assembly = typeof(EncryptionContainerExtensions).Assembly;
             string informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "<missing>";
             string assemblyVersion = assembly.GetName().Version?.ToString() ?? "<missing>";
-            return new VersionResult(Version, ExpectedPackageVersion, informational.Split('+')[0], assemblyVersion);
+            string expected = ReadExpectedPackageVersion();
+            return new VersionResult(Version, expected, informational.Split('+')[0], assemblyVersion);
+        }
+
+        private static string ReadExpectedPackageVersion()
+        {
+            AssemblyMetadataAttribute[] matches = typeof(MatrixCore).Assembly
+                .GetCustomAttributes<AssemblyMetadataAttribute>()
+                .Where(attribute => string.Equals(attribute.Key, ExpectedPackageVersionKey, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Configured assembly metadata '{ExpectedPackageVersionKey}' must appear exactly once; found {matches.Length} entries.");
+            }
+
+            string expected = matches[0].Value;
+            if (string.IsNullOrWhiteSpace(expected))
+            {
+                throw new InvalidOperationException(
+                    $"Configured assembly metadata '{ExpectedPackageVersionKey}' must contain a non-empty package version.");
+            }
+
+            return expected;
         }
 
         // Writes ONE cell's hardened doc (BuildDoc(id)) under {family, wproc}. Mirrors Program.Write's per-cell

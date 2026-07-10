@@ -6,26 +6,19 @@
 # wired into PR or CI triggers (trigger: none, pr: none) — register it as its own pipeline and run it
 # on demand, exactly as the sibling subprocess harness (tests/CompatMatrix/run-matrix.ps1) is manual.
 #
-# What it tests: CURRENT (the in-repo Encryption.Custom source, packed as 1.1.0-preview01) against OLD
-# (1.0.0-preview07 from nuget.org). The NEW node is built FROM SOURCE via `dotnet pack` into a temp
-# feed, and nuget.ci.config resolves the package from %COMPATMATRIX_FEED% — so CI needs NO checked-in
-# local feed. Uses the repo's Windows Cosmos emulator (templates/emulator-setup.yml, HTTPS on 8081);
-# the harness self-skips (Assert.Inconclusive) if the emulator is unreachable.
+# What it tests: CURRENT (the in-repo Encryption.Custom source, packed with a commit-qualified
+# 1.1.0-preview01.g<short-commit> identity) against OLD (1.0.0-preview07 from nuget.org). The NEW node
+# is built FROM SOURCE via `dotnet pack` into a temp feed, and nuget.ci.config resolves that exact
+# package from %COMPATMATRIX_FEED% — so CI needs NO checked-in local feed. Uses the repo's Windows
+# Cosmos emulator (templates/emulator-setup.yml, HTTPS on 8081); emulator initialization is required.
 #
 # GREEN-NESS: this leg passes only when the branch's source already contains the Stream-processor
 # data-corruption fixes. On a branch WITHOUT them the hardened Stream cells FAIL BY DESIGN (the
 # anti-fake-green control — see tests/CompatMatrix/RUN-REPORT.md §8), so it is regression infra that
-# turns green once the fixes are in the source under test (e.g. after they merge to main). To instead
-# test the SHIPPED package, point COMPATMATRIX_FEED at a feed that already has 1.1.0-preview01 and
-# drop the pack step.
+# turns green once the fixes are in the source under test (e.g. after they merge to main).
 # ------------------------------------------------------------
 trigger: none
 pr: none
-
-parameters:
-  - name: BuildConfiguration
-    type: string
-    default: Release
 
 pool:
   name: 'OneES'
@@ -33,6 +26,7 @@ pool:
 variables:
   CompatFeed: $(Build.ArtifactStagingDirectory)/compat-feed
   CompatMatrixDir: Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
+  CompatNuGetPackages: $(Agent.TempDirectory)/compat-nuget-packages/$(Build.BuildId)
 
 steps:
   - checkout: self
@@ -44,14 +38,35 @@ steps:
       packageType: sdk
       version: 8.x
 
-  # Build the NEW/CURRENT node (in-repo source, versions to 1.1.0-preview01) into a temp feed — no
-  # local-feed needed. /p:IsPreview=true matches the shipped preview build configuration.
+  - powershell: |
+      $sourceVersion = '$(Build.SourceVersion)'
+      if ($sourceVersion.Length -lt 8) {
+        throw "Build.SourceVersion must contain at least 8 characters."
+      }
+      $shortCommit = $sourceVersion.Substring(0, 8).ToLowerInvariant()
+      $newVersion = "1.1.0-preview01.g$shortCommit"
+      Write-Host "##vso[task.setvariable variable=CompatMatrixNewVersion]$newVersion"
+    displayName: Derive commit-qualified NEW package version
+
+  - powershell: |
+      $packages = '$(CompatNuGetPackages)'
+      if (Test-Path -LiteralPath $packages) {
+        Remove-Item -LiteralPath $packages -Recurse -Force
+      }
+      New-Item -ItemType Directory -Path $packages -Force | Out-Null
+    displayName: Prepare isolated NuGet packages directory
+
+  # Build the NEW/CURRENT node into a temp feed under a unique source-commit identity. The same
+  # version and Release configuration are passed to restore/build and compiled into the worker/test
+  # version guards below.
   - task: DotNetCoreCLI@2
-    displayName: Pack Encryption.Custom source (CURRENT = 1.1.0-preview01)
+    displayName: Pack Encryption.Custom source (commit-qualified CURRENT)
     inputs:
       command: custom
       custom: pack
-      arguments: 'Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj -c ${{ parameters.BuildConfiguration }} /p:IsPreview=true -o $(CompatFeed)'
+      arguments: 'Microsoft.Azure.Cosmos.Encryption.Custom/src/Microsoft.Azure.Cosmos.Encryption.Custom.csproj -c Release /p:IsPreview=true /p:CustomEncryptionVersion=$(CompatMatrixNewVersion) -o $(CompatFeed)'
+    env:
+      NUGET_PACKAGES: $(CompatNuGetPackages)
 
   # Windows Cosmos emulator (HTTPS on 8081), same setup the repo's emulator tests use.
   - template: ../../../templates/emulator-setup.yml
@@ -64,9 +79,11 @@ steps:
     inputs:
       command: test
       projects: '$(CompatMatrixDir)/Tests/CompatMatrix.Server.Tests.csproj'
-      arguments: '-c ${{ parameters.BuildConfiguration }} /p:RestoreConfigFile=$(Build.SourcesDirectory)/$(CompatMatrixDir)/nuget.ci.config'
+      arguments: '-c Release /p:RestoreConfigFile=$(Build.SourcesDirectory)/$(CompatMatrixDir)/nuget.ci.config /p:CompatMatrixNewVersion=$(CompatMatrixNewVersion)'
       publishTestResults: true
       testRunTitle: CompatMatrix.Server cross-version compat matrix
     env:
       COMPATMATRIX_FEED: $(CompatFeed)
+      COMPATMATRIX_REQUIRE_EMULATOR: 'true'
       COSMOS_ENDPOINT: https://127.0.0.1:8081/
+      NUGET_PACKAGES: $(CompatNuGetPackages)

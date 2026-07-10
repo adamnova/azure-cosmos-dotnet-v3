@@ -57,10 +57,7 @@ public sealed class StdioNode : INode
     }
 
     public async Task<VersionInfo?> WaitVersionAsync(TimeSpan timeout)
-    {
-        try { return await this.RpcAsync<VersionInfo>(new { op = "version" }, timeout); }
-        catch { return null; }
-    }
+        => await this.RpcAsync<VersionInfo>(new { op = "version" }, timeout);
 
     public async Task<(bool ok, string detail)> InitAsync()
     {

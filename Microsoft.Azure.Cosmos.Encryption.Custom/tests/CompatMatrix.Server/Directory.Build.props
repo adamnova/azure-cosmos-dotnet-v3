@@ -3,15 +3,23 @@
   <!-- Import the inherited chain (Encryption.Custom -> repo root) so shared build settings still apply. -->
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
-  <!-- Single source of the two compat-matrix package pins (review finding #6). NOTE: the C# version-guard
-       constants must stay equal to these — MatrixCore.ExpectedPackageVersion (#if CEC_NEW) and the node
-       "Expected" strings in Driver.cs / DriverStdio.cs / CompatMatrixCellTests.cs — and the CI pack-from-
-       source leg additionally requires the repo-root <CustomEncryptionVersion> to equal CompatMatrixNewVersion.
-       On retarget to main, that <CustomEncryptionVersion> bump must land FIRST or restore/version-guard fails
-       (see README "Version pin & retarget"). -->
+  <!-- Single source of the two compat-matrix package pins. CI overrides CompatMatrixNewVersion with a
+       commit-qualified package identity; local builds retain the fixed preview01 default. The values are
+       embedded as assembly metadata so workers, drivers, and tests use the same version guards as restore. -->
   <PropertyGroup>
     <CompatMatrixOldVersion>1.0.0-preview07</CompatMatrixOldVersion>
-    <CompatMatrixNewVersion>1.1.0-preview01</CompatMatrixNewVersion>
+    <CompatMatrixNewVersion Condition="'$(CompatMatrixNewVersion)' == ''">1.1.0-preview01</CompatMatrixNewVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>CompatMatrixOldVersion</_Parameter1>
+      <_Parameter2>$(CompatMatrixOldVersion)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>CompatMatrixNewVersion</_Parameter1>
+      <_Parameter2>$(CompatMatrixNewVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 
 </Project>

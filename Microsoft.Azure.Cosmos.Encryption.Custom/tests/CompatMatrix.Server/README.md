@@ -46,8 +46,10 @@ Option C (stdio):
 - `driver-shared/StdioNode.cs` — `StdioNode : INode` (shared by the console driver and the test harness).
 - `DriverStdio/DriverStdio.cs` — console driver (`MatrixRunner`: grid + exit codes).
 - `Tests/` — **MSTest per-cell harness**: one `dotnet test` case per cell (`CompatMatrixCellTests` +
-  `driver-shared/MatrixHarness`). 45 cases (39 cells + 3 equivalence + 2 tamper + 1 version guard);
-  self-skips (`Assert.Inconclusive`) when the emulator is unreachable.
+  `driver-shared/MatrixHarness`). 63 cases: 45 matrix cases (39 cells + 3 equivalence + 2 tamper +
+  1 version guard) plus 18 follow-up contract tests. Optional local runs skip the 45 matrix cases
+  when the emulator or workers are unavailable; required CI runs fail, with missing workers reported
+  directly from class initialization.
 
 Shared + support:
 - `driver-shared/INode.cs`, `driver-shared/MatrixRunner.cs`, `driver-shared/MatrixHarness.cs` — the
@@ -74,8 +76,9 @@ cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
 
 # Option C as a PROPER dotnet-test harness — one MSTest case per cell; skips cleanly with no emulator:
 dotnet test ./Tests/CompatMatrix.Server.Tests.csproj -c Release
-#   emulator up  -> Passed: 45  (39 cells + 3 equivalence + 2 tamper + 1 version guard)
-#   emulator down -> Skipped: 45 (Assert.Inconclusive), Failed: 0
+#   emulator up             -> Passed: 63 (45 matrix + 18 follow-up), Failed: 0
+#   emulator down, optional -> Skipped: 45, Passed: 18 follow-up, Failed: 0
+#   required mode           -> failures are fatal; missing workers fail class initialization
 ```
 Exit: `0` all PASS · `1` data/version/count/tamper break · `3` emulator unreachable (skip, no hang).
 
@@ -94,16 +97,15 @@ response per line on stdout. Ops: `version` · `init {endpoint,key,db}` · `writ
 `read {family,rproc,path,id}` · `tamper {id}` · `shutdown`. Responses mirror the HTTP DTOs.
 
 ## Version pin & retarget
-The two package versions are pinned once in `Directory.Build.props` (`CompatMatrixOldVersion` =
-`1.0.0-preview07`, `CompatMatrixNewVersion` = `1.1.0-preview01`) and flow into all four package
-references. **These must stay equal to** the C# version-guard constants — `MatrixCore.ExpectedPackageVersion`
-(`#if CEC_NEW`) and the node `Expected` strings in `Driver.cs` / `DriverStdio.cs` / `CompatMatrixCellTests.cs` —
-and, for the CI pack-from-source leg, to the repo-root `<CustomEncryptionVersion>`.
+`CompatMatrixOldVersion` stays pinned to `1.0.0-preview07`. `CompatMatrixNewVersion` defaults to
+`1.1.0-preview01` for local development, and flows into all NEW package references plus assembly
+metadata consumed by the workers, drivers, and test version guards.
 
-**Retarget-to-main ordering:** `CompatMatrixNewVersion` (`1.1.0-preview01`) is the *next* release; `main`
-is behind. When retargeting this stacked PR to `main`, the `<CustomEncryptionVersion>` bump to
-`1.1.0-preview01` must land **first** — otherwise the `[1.1.0-preview01]` restore fails (dev) or the
-pack-from-source produces a differently-versioned package and the version guard trips (CI).
+CI derives `1.1.0-preview01.g<short-commit>` from `Build.SourceVersion`, passes it as
+`CustomEncryptionVersion` when packing, and passes the same value as `CompatMatrixNewVersion` when
+restoring and testing. Pack and test/build both use Release plus a clean, build-unique NuGet packages
+directory. This avoids reusing a fixed NEW package identity or cached package contents while keeping
+local commands unchanged.
 
 ## Notes
 - Each run uses a fresh GUID database (`compat-matrix-*`); repeated local runs accumulate DBs on the

@@ -5,12 +5,13 @@
 // as PER-CELL operations so an MSTest class can turn each cell into its own [DataTestMethod] via
 // [DynamicData] — the "proper dotnet-test-hosted harness". The static Read/EquivCells enumerations
 // are pure (no live node), so MSTest can enumerate cases at discovery time; the live nodes are
-// launched once in [ClassInitialize]. SkipReason => emulator down (Assert.Inconclusive);
-// FatalError => version/write break (fail).
+// launched once in [ClassInitialize]. SkipReason => optional emulator down (Assert.Inconclusive);
+// FatalError => required emulator/configuration/version/write break (fail).
 namespace CompatMatrix.Server.Harness;
 
 public sealed class MatrixHarness : IDisposable
 {
+    private const string RequireEmulatorVariable = "COMPATMATRIX_REQUIRE_EMULATOR";
     private readonly IReadOnlyList<INode> nodes;
     private readonly Dictionary<string, string> expectedHash = new();
     private readonly Dictionary<string, WriteInfo> writeById = new();
@@ -30,16 +31,56 @@ public sealed class MatrixHarness : IDisposable
     // Launch all workers at once, version-guard, init (emulator gate), then write every cell once.
     public async Task StartAsync(string endpoint, string key, string db, string toggle)
     {
+        bool emulatorRequired;
+        try
+        {
+            emulatorRequired = EmulatorIsRequired();
+        }
+        catch (InvalidOperationException exception)
+        {
+            this.FatalError = $"CONFIGURATION BREAK: {exception.Message}";
+            return;
+        }
+
         foreach (INode n in this.nodes) { n.Launch(endpoint, key, db); }
         foreach (INode n in this.nodes)
         {
-            VersionInfo? v = await n.WaitVersionAsync(TimeSpan.FromSeconds(40));
+            VersionInfo? v;
+            try
+            {
+                v = await n.WaitVersionAsync(TimeSpan.FromSeconds(40));
+            }
+            catch (Exception exception)
+            {
+                this.FatalError = $"VERSION BREAK: {n.Name} worker version probe failed: {exception.Message}";
+                return;
+            }
+
             if (v is null) { this.FatalError = $"{n.Name}: worker did not answer version."; return; }
             n.Version = v;
         }
         foreach (INode n in this.nodes)
         {
-            if (n.Version!.Informational != n.Expected) { this.FatalError = $"VERSION BREAK: {n.Name} loaded '{n.Version.Informational}', expected '{n.Expected}'."; return; }
+            if (string.IsNullOrWhiteSpace(n.Version!.Expected))
+            {
+                this.FatalError = $"VERSION BREAK: {n.Name} worker returned missing or malformed configured-version assembly metadata.";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(n.Version.Informational) || n.Version.Informational == "<missing>")
+            {
+                this.FatalError = $"VERSION BREAK: {n.Name} worker returned a missing or malformed loaded package version.";
+                return;
+            }
+            if (!string.Equals(n.Version.Expected, n.Expected, StringComparison.Ordinal))
+            {
+                this.FatalError = $"VERSION BREAK: {n.Name} worker expects '{n.Version.Expected}', configured '{n.Expected}'.";
+                return;
+            }
+            if (!string.Equals(n.Version.Informational, n.Expected, StringComparison.Ordinal))
+            {
+                this.FatalError = $"VERSION BREAK: {n.Name} loaded '{n.Version.Informational}', expected '{n.Expected}'.";
+                return;
+            }
         }
         if (this.nodes.Select(n => n.Version!.Informational).Distinct().Count() != this.nodes.Count)
         {
@@ -50,7 +91,19 @@ public sealed class MatrixHarness : IDisposable
         foreach (INode n in this.nodes)
         {
             (bool ok, string detail) = await n.InitAsync();
-            if (!ok) { this.SkipReason = $"Cosmos emulator not reachable for {n.Name} ({detail})."; return; }
+            if (!ok)
+            {
+                string reason = $"Cosmos emulator not reachable for {n.Name} ({detail}).";
+                if (emulatorRequired)
+                {
+                    this.FatalError = reason;
+                }
+                else
+                {
+                    this.SkipReason = reason;
+                }
+                return;
+            }
         }
 
         foreach (INode writer in this.nodes)
@@ -104,6 +157,23 @@ public sealed class MatrixHarness : IDisposable
     }
 
     public VersionInfo? VersionOf(string name) => this.Node(name).Version;
+
+    public static bool EmulatorIsRequired()
+    {
+        string value = (Environment.GetEnvironmentVariable(RequireEmulatorVariable) ?? string.Empty).Trim();
+        if (value.Length == 0 || string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(value, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        throw new InvalidOperationException(
+            $"{RequireEmulatorVariable} must be empty, 'false', or 'true'; received '{value}'.");
+    }
 
     public void Dispose()
     {

@@ -38,8 +38,8 @@ internal static class Program
 
         List<INode> nodes = new()
         {
-            new HttpNode("old", oldDll, "1.0.0-preview07"),
-            new HttpNode("new", newDll, "1.1.0-preview01"),
+            new HttpNode("old", oldDll, ConfiguredVersions.Old),
+            new HttpNode("new", newDll, ConfiguredVersions.New),
         };
         return await MatrixRunner.RunAsync(nodes, endpoint, key, db, toggle, "thin-server / HTTP");
     }

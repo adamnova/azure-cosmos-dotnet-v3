@@ -106,8 +106,11 @@ each matrix cell is its own MSTest case via `[DynamicData]`, so `dotnet test` gi
 PASS/FAIL reporting (e.g. `Cell_RoundTrips ("new","old","MDE","Stream","Newtonsoft","point")`).
 `[ClassInitialize]` launches the two stdio workers once; `[ClassCleanup]` disposes them; the workers
 are built via `ProjectReference ReferenceOutputAssembly="false"`. Result:
-- **emulator up → `Passed: 45`** (39 cells + 3 equivalence + 2 tamper + 1 version guard),
-- **emulator down → `Skipped: 45, Failed: 0`** (`Assert.Inconclusive`) — safe in non-emulator CI legs.
+- **emulator up → `Passed: 63`** (45 matrix + 18 follow-up; the matrix is 39 cells + 3 equivalence +
+  2 tamper + 1 version guard),
+- **emulator down, optional local mode → `Skipped: 45, Passed: 18 follow-up, Failed: 0`**,
+- **required mode → initialization failures are fatal**; missing workers fail class initialization
+  directly rather than making every matrix case inconclusive.
 
 ### Option D — coexistence probe (`AlcProbe/`, evidence only)
 Loaded both crypto DLLs into two `AssemblyLoadContext`s in one process:
@@ -183,22 +186,22 @@ cd AlcProbe; dotnet run                     # Option D coexistence evidence
 ```
 
 ## 8. CI integration — what's feasible, and the pack-from-source finding
-The matrix needs TWO packages: OLD = `1.0.0-preview07` (nuget.org) and NEW = `1.1.0-preview01`. The
-**fixed** preview01 exists only in the developer `local-feed` (built from the Stream-corruption-fixes
-branch); it is **not on any CI-accessible feed**. That is exactly why the sibling subprocess harness
-(`tests/CompatMatrix`) is a MANUAL script excluded from the solution — the standard CI restore
-(repo-root `NuGet.config`, no local-feed) can't get preview01. Two CI paths:
+The matrix needs TWO packages: OLD = `1.0.0-preview07` (nuget.org) and NEW = `1.1.0-preview01` by
+default for local runs. CI cannot safely reuse that fixed local-feed identity, so the pipeline derives
+`1.1.0-preview01.g<short-commit>` for each source revision. The sibling subprocess harness
+(`tests/CompatMatrix`) remains a MANUAL script excluded from the solution.
 
 - **Publish-then-restore (truthful, future):** once `1.1.0-preview01` is published to nuget.org or an
   ADO artifact feed, a leg just restores it (drop the pack step; point `COMPATMATRIX_FEED` at that
   feed). Tests the SHIPPED package; can auto-run and stay green.
 - **Pack-from-source (regression, now):** `azure-pipelines-compat-matrix.yml` (opt-in, `trigger: none`)
-  packs the in-repo source — which versions to `1.1.0-preview01` — into a temp feed and resolves NEW
-  from `%COMPATMATRIX_FEED%` via `nuget.ci.config`. No checked-in feed needed. This tests CURRENT
-  (HEAD source) ↔ OLD — a HEAD regression leg.
+  packs the in-repo source as `1.1.0-preview01.g<short-commit>` into a temp feed and passes that same
+  `CompatMatrixNewVersion` through Release restore/build and the worker/test version guards. A clean,
+  build-unique NuGet packages directory prevents cache reuse. No checked-in feed is needed. This tests
+  CURRENT (HEAD source) ↔ OLD — a HEAD regression leg.
 
-**Validated locally (the plumbing):** `dotnet pack` → NEW restores `1.1.0-preview01` from the packed
-feed into a CLEAN packages dir (no local-feed, no cache) → the harness runs. **Finding:** packing
+**Validated locally (the plumbing):** `dotnet pack` → NEW restores the configured version from the
+packed feed into a CLEAN packages dir (no local-feed, no cache) → the harness runs. **Finding:** packing
 *this* branch's source yields an **unfixed** preview01, so the hardened **Stream** cells FAIL with the
 exact RUN-REPORT §8 signature — `PlainEscaped got 'p_q=\" p_b=\\ …' want 'p_q=" p_b=\ …'` (Stream
 plaintext double-escape) — while Newtonsoft/AEAD cells pass (**24 fail / 21 pass**). That is the

@@ -5,8 +5,8 @@
 // MSTest case via [DynamicData], so `dotnet test` reports per-cell PASS/FAIL. The two version-pinned
 // stdio workers are launched ONCE ([ClassInitialize]) and driven via the shared StdioNode +
 // MatrixHarness; the sensitive doc is built/encrypted/self-verified inside the workers (only status +
-// SHA-256 hashes cross the stdio boundary). If the Cosmos emulator is unreachable the whole class
-// self-skips (Assert.Inconclusive), so it is safe in non-emulator CI legs.
+// SHA-256 hashes cross the stdio boundary). An unreachable emulator self-skips for optional local
+// runs and fails required CI runs.
 namespace CompatMatrix.Server.Tests
 {
     using System;
@@ -30,14 +30,21 @@ namespace CompatMatrix.Server.Tests
             (string? oldDll, string? newDll) = ResolveWorkers();
             if (oldDll is null || newDll is null)
             {
-                status = "worker DLLs not built (build OldWorker/NewWorker, or set COMPATMATRIX_OLD_WORKER/NEW_WORKER)";
+                const string missingWorkers =
+                    "worker DLLs not built (build OldWorker/NewWorker, or set COMPATMATRIX_OLD_WORKER/NEW_WORKER)";
+                if (MatrixHarness.EmulatorIsRequired())
+                {
+                    Assert.Fail(missingWorkers);
+                }
+
+                status = missingWorkers;
                 return;
             }
 
             List<INode> nodes = new()
             {
-                new StdioNode("old", oldDll, "1.0.0-preview07"),
-                new StdioNode("new", newDll, "1.1.0-preview01"),
+                new StdioNode("old", oldDll, ConfiguredVersions.Old),
+                new StdioNode("new", newDll, ConfiguredVersions.New),
             };
             harness = new MatrixHarness(nodes);
 
@@ -58,8 +65,8 @@ namespace CompatMatrix.Server.Tests
         public void Versions_AreExpected_AndDistinct()
         {
             Gate();
-            Assert.AreEqual("1.0.0-preview07", harness!.VersionOf("old")!.Informational, "OLD must load preview07");
-            Assert.AreEqual("1.1.0-preview01", harness.VersionOf("new")!.Informational, "NEW must load preview01");
+            Assert.AreEqual(ConfiguredVersions.Old, harness!.VersionOf("old")!.Informational, "OLD must load the configured package");
+            Assert.AreEqual(ConfiguredVersions.New, harness.VersionOf("new")!.Informational, "NEW must load the configured package");
             Assert.AreNotEqual(harness.VersionOf("old")!.Informational, harness.VersionOf("new")!.Informational, "workers must load different versions");
         }
 
@@ -99,7 +106,7 @@ namespace CompatMatrix.Server.Tests
             yield return new object[] { "new" };
         }
 
-        // A version/write break fails every case; an unreachable emulator (or unbuilt workers) skips.
+        // A version/write break fails every case; optional local emulator/worker absence skips.
         private static void Gate()
         {
             if (status.StartsWith("FATAL", StringComparison.Ordinal)) { Assert.Fail(status); }

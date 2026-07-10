@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- SPIKE NEW stdio worker (Option C): Encryption.Custom 1.1.0-preview01 from the local feed.
+  <!-- SPIKE NEW stdio worker (Option C): the configured Encryption.Custom version from the local feed.
        Reuses the SAME MatrixCore + KeyProviders as the ASP.NET shim; hosts them over stdio (Worker.cs). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
