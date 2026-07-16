@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- SPIKE NEW stdio worker (Option C): the configured Encryption.Custom version from the local feed.
+       Reuses the SAME MatrixCore + KeyProviders as the ASP.NET shim; hosts them over stdio (Worker.cs). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CompatMatrix.Worker.New</AssemblyName>
+    <RootNamespace>CompatMatrix.Server</RootNamespace>
+    <DefineConstants>$(DefineConstants);CEC_NEW</DefineConstants>
+    <SignAssembly>false</SignAssembly>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\shim\MatrixCore.cs" Link="MatrixCore.cs" />
+    <Compile Include="..\shim\KeyProviders.cs" Link="KeyProviders.cs" />
+    <Compile Include="..\shim\Worker.cs" Link="Worker.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.Cosmos.Encryption.Custom" Version="[$(CompatMatrixNewVersion)]" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>

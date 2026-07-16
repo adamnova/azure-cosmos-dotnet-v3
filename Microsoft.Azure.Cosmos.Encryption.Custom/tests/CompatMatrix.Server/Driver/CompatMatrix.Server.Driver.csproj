@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- SPIKE driver: the typed orchestrator that replaces run-matrix.ps1. It launches the two
+       version-pinned shims, health-checks + version-guards them, drives the matrix over HTTP,
+       prints the grid and returns exit codes (0 pass / 1 break / 3 emulator-skip). It has NO
+       dependency on Encryption.Custom or the local feed; it only speaks the HTTP contract. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CompatMatrix.Server.Driver</AssemblyName>
+    <RootNamespace>CompatMatrix.Server.Driver</RootNamespace>
+    <SignAssembly>false</SignAssembly>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\driver-shared\*.cs" />
+  </ItemGroup>
+
+</Project>
