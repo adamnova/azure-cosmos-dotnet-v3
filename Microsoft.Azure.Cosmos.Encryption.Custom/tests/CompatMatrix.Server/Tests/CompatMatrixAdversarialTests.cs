@@ -55,6 +55,18 @@ public sealed class CompatMatrixAdversarialTests
     }
 
     [TestMethod]
+    public async Task AeadStreamWrite_UnexpectedFailure_FailsHarness()
+    {
+        using MatrixHarness matrix = await StartMatrixAsync(
+            initOk: true,
+            newAeadStreamStatus: "FAIL");
+
+        Assert.IsNotNull(matrix.FatalError, "A skipped AEAD+Stream read cell must not hide a failed write.");
+        StringAssert.Contains(matrix.FatalError, "AEAD+Stream");
+        StringAssert.Contains(matrix.FatalError, "FAIL");
+    }
+
+    [TestMethod]
     public void CiDefinition_UsesFreshBuildUniqueNuGetPackagesForPackAndTest()
     {
         string yaml = File.ReadAllText(Path.Combine(CompatMatrixRoot(), "azure-pipelines-compat-matrix.yml"));
@@ -132,12 +144,14 @@ public sealed class CompatMatrixAdversarialTests
             "EXPLORATION.md");
     }
 
-    private static async Task<MatrixHarness> StartMatrixAsync(bool initOk)
+    private static async Task<MatrixHarness> StartMatrixAsync(
+        bool initOk,
+        string newAeadStreamStatus = "EXPECTED-UNSUPPORTED")
     {
         MatrixHarness matrix = new(new INode[]
         {
-            new FakeNode("old", OldVersion, initOk: true),
-            new FakeNode("new", NewVersion, initOk),
+            new FakeNode("old", OldVersion, initOk: true, aeadStreamStatus: "OLD-NO-STREAM-EXPECTED"),
+            new FakeNode("new", NewVersion, initOk, newAeadStreamStatus),
         });
         await matrix.StartAsync("https://unused.invalid/", "unused", "unused", "both");
         return matrix;
@@ -185,12 +199,14 @@ public sealed class CompatMatrixAdversarialTests
     private sealed class FakeNode : INode
     {
         private readonly bool initOk;
+        private readonly string aeadStreamStatus;
 
-        public FakeNode(string name, string expected, bool initOk)
+        public FakeNode(string name, string expected, bool initOk, string aeadStreamStatus)
         {
             this.Name = name;
             this.Expected = expected;
             this.initOk = initOk;
+            this.aeadStreamStatus = aeadStreamStatus;
         }
 
         public string Name { get; }
@@ -215,7 +231,7 @@ public sealed class CompatMatrixAdversarialTests
 
         public Task<WriteInfo> WriteAsync(string family, string wproc, string id)
             => Task.FromResult(new WriteInfo(
-                family == "AEAD" && wproc == "Stream" ? "UNSUPPORTED-EXPECTED" : "OK",
+                family == "AEAD" && wproc == "Stream" ? this.aeadStreamStatus : "OK",
                 "fake",
                 "hash-" + id));
 

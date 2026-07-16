@@ -333,7 +333,7 @@ public sealed class CompatMatrixFollowUpTests
 
         public Task<WriteInfo> WriteAsync(string family, string wproc, string id)
             => Task.FromResult(new WriteInfo(
-                family == "AEAD" && wproc == "Stream" ? "UNSUPPORTED-EXPECTED" : "OK",
+                family == "AEAD" && wproc == "Stream" ? "EXPECTED-UNSUPPORTED" : "OK",
                 "fake",
                 "hash-" + id));
 

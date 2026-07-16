@@ -46,8 +46,8 @@ Option C (stdio):
 - `driver-shared/StdioNode.cs` — `StdioNode : INode` (shared by the console driver and the test harness).
 - `DriverStdio/DriverStdio.cs` — console driver (`MatrixRunner`: grid + exit codes).
 - `Tests/` — **MSTest per-cell harness**: one `dotnet test` case per cell (`CompatMatrixCellTests` +
-  `driver-shared/MatrixHarness`). 63 cases: 45 matrix cases (39 cells + 3 equivalence + 2 tamper +
-  1 version guard) plus 18 follow-up contract tests. Optional local runs skip the 45 matrix cases
+  `driver-shared/MatrixHarness`). 64 cases: 45 matrix cases (39 cells + 3 equivalence + 2 tamper +
+  1 version guard) plus 19 follow-up contract tests. Optional local runs skip the 45 matrix cases
   when the emulator or workers are unavailable; required CI runs fail, with missing workers reported
   directly from class initialization.
 
@@ -76,8 +76,8 @@ cd Microsoft.Azure.Cosmos.Encryption.Custom/tests/CompatMatrix.Server
 
 # Option C as a PROPER dotnet-test harness — one MSTest case per cell; skips cleanly with no emulator:
 dotnet test ./Tests/CompatMatrix.Server.Tests.csproj -c Release
-#   emulator up             -> Passed: 63 (45 matrix + 18 follow-up), Failed: 0
-#   emulator down, optional -> Skipped: 45, Passed: 18 follow-up, Failed: 0
+#   emulator up             -> Passed: 64 (45 matrix + 19 follow-up), Failed: 0
+#   emulator down, optional -> Skipped: 45, Passed: 19 follow-up, Failed: 0
 #   required mode           -> failures are fatal; missing workers fail class initialization
 ```
 Exit: `0` all PASS · `1` data/version/count/tamper break · `3` emulator unreachable (skip, no hang).

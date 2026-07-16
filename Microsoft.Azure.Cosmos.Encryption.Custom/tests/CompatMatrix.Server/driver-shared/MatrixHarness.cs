@@ -115,7 +115,14 @@ public sealed class MatrixHarness : IDisposable
                 this.expectedHash[id] = w.ExpectedSignatureHash;
                 this.writeById[id] = w;
                 this.writes.Add((writer.Name, family, wproc, w));
-                if (w.Status == "UNSUPPORTED-DID-NOT-THROW") { this.FatalError = $"WRITE BREAK: AEAD+Stream did not throw on a Stream-capable version ({id})."; return; }
+                if (family == "AEAD"
+                    && wproc == "Stream"
+                    && writer.Name != "old"
+                    && !string.Equals(w.Status, "EXPECTED-UNSUPPORTED", StringComparison.Ordinal))
+                {
+                    this.FatalError = $"WRITE BREAK: AEAD+Stream on a Stream-capable version must return EXPECTED-UNSUPPORTED; got '{w.Status}' ({w.Detail}) for {id}.";
+                    return;
+                }
             }
         }
     }
