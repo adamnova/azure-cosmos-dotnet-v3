@@ -106,9 +106,9 @@ each matrix cell is its own MSTest case via `[DynamicData]`, so `dotnet test` gi
 PASS/FAIL reporting (e.g. `Cell_RoundTrips ("new","old","MDE","Stream","Newtonsoft","point")`).
 `[ClassInitialize]` launches the two stdio workers once; `[ClassCleanup]` disposes them; the workers
 are built via `ProjectReference ReferenceOutputAssembly="false"`. Result:
-- **emulator up → `Passed: 64`** (45 matrix + 19 follow-up; the matrix is 39 cells + 3 equivalence +
+- **emulator up → `Passed: 65`** (45 matrix + 20 follow-up; the matrix is 39 cells + 3 equivalence +
   2 tamper + 1 version guard),
-- **emulator down, optional local mode → `Skipped: 45, Passed: 19 follow-up, Failed: 0`**,
+- **emulator down, optional local mode → `Skipped: 45, Passed: 20 follow-up, Failed: 0`**,
 - **required mode → initialization failures are fatal**; missing workers fail class initialization
   directly rather than making every matrix case inconclusive.
 

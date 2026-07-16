@@ -67,6 +67,18 @@ public sealed class CompatMatrixAdversarialTests
     }
 
     [TestMethod]
+    public async Task AeadStreamWrite_OldUnexpectedFailure_FailsHarness()
+    {
+        using MatrixHarness matrix = await StartMatrixAsync(
+            initOk: true,
+            oldAeadStreamStatus: "FAIL");
+
+        Assert.IsNotNull(matrix.FatalError, "A skipped old-worker AEAD+Stream cell must not hide a failed write.");
+        StringAssert.Contains(matrix.FatalError, "AEAD+Stream");
+        StringAssert.Contains(matrix.FatalError, "FAIL");
+    }
+
+    [TestMethod]
     public void CiDefinition_UsesFreshBuildUniqueNuGetPackagesForPackAndTest()
     {
         string yaml = File.ReadAllText(Path.Combine(CompatMatrixRoot(), "azure-pipelines-compat-matrix.yml"));
@@ -146,11 +158,12 @@ public sealed class CompatMatrixAdversarialTests
 
     private static async Task<MatrixHarness> StartMatrixAsync(
         bool initOk,
+        string oldAeadStreamStatus = "OLD-NO-STREAM-EXPECTED",
         string newAeadStreamStatus = "EXPECTED-UNSUPPORTED")
     {
         MatrixHarness matrix = new(new INode[]
         {
-            new FakeNode("old", OldVersion, initOk: true, aeadStreamStatus: "OLD-NO-STREAM-EXPECTED"),
+            new FakeNode("old", OldVersion, initOk: true, oldAeadStreamStatus),
             new FakeNode("new", NewVersion, initOk, newAeadStreamStatus),
         });
         await matrix.StartAsync("https://unused.invalid/", "unused", "unused", "both");
