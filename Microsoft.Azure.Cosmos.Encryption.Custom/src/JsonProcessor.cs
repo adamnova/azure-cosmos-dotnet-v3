@@ -5,20 +5,20 @@
 namespace Microsoft.Azure.Cosmos.Encryption.Custom
 {
     /// <summary>
-    /// API for JSON processing
+    /// API for JSON processing.
     /// </summary>
     internal enum JsonProcessor
     {
         /// <summary>
-        /// Newtonsoft.Json
+        /// Newtonsoft.Json.
         /// </summary>
         Newtonsoft,
 
 #if NET8_0_OR_GREATER
         /// <summary>
-        /// Ut8JsonReader/Writer
+        /// Utf8JsonReader/Writer.
         /// </summary>
-        /// <remarks>Available with .NET8.0 package only.</remarks>
+        /// <remarks>Available with .NET 8.0 package only.</remarks>
         Stream,
 #endif
     }

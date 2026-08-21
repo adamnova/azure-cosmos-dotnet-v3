@@ -55,10 +55,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// };
         /// ]]>
         /// </code>
-        /// The per-call override takes precedence over the container default. A strongly-typed surface for this
-        /// override is planned; until then the string form above is the supported per-call mechanism. Note that the
-        /// LINQ entry points (<see cref="ToEncryptionFeedIterator{T}"/> and <see cref="ToEncryptionStreamIterator{T}"/>)
-        /// honor only the container default and do not currently accept per-call options.
+        /// The per-call override takes precedence over the container default. The LINQ entry points
+        /// (<see cref="ToEncryptionFeedIterator{T}"/> and <see cref="ToEncryptionStreamIterator{T}"/>)
+        /// honor only the container default and do not accept per-call options.
         /// </para>
         /// <para>
         /// <strong>Disposal contract for <c>FeedResponse&lt;DecryptableItem&gt;</c>.</strong> The <c>FeedResponse&lt;T&gt;</c>
@@ -98,8 +97,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// <remarks>
         /// On .NET 8+, this iterator uses the container's default JSON processor (see
         /// <c>UseStreamingJsonProcessingByDefault</c>). It does not accept per-call
-        /// <see cref="RequestOptions"/>, so the per-call <c>"encryption-json-processor"</c> override is not honored on
-        /// the LINQ path; set the container default if you need streaming for LINQ-sourced iterators.
+        /// <see cref="RequestOptions"/>, so the per-call <c>"encryption-json-processor"</c> override is not honored
+        /// on the LINQ path.
         /// </remarks>
         /// <example>
         /// This example shows how to get FeedIterator from LINQ.
@@ -139,8 +138,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// <remarks>
         /// On .NET 8+, this iterator uses the container's default JSON processor (see
         /// <c>UseStreamingJsonProcessingByDefault</c>). It does not accept per-call
-        /// <see cref="RequestOptions"/>, so the per-call <c>"encryption-json-processor"</c> override is not honored on
-        /// the LINQ path; set the container default if you need streaming for LINQ-sourced iterators.
+        /// <see cref="RequestOptions"/>, so the per-call <c>"encryption-json-processor"</c> override is not honored
+        /// on the LINQ path.
         /// </remarks>
         /// <example>
         /// This example shows how to get FeedIterator from LINQ.

@@ -77,6 +77,22 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Tests
         }
 
         [TestMethod]
+        public void TryReadOverride_UndefinedNumericString_Ignored()
+        {
+            RequestOptions ro = new ItemRequestOptions
+            {
+                Properties = new Dictionary<string, object>
+                {
+                    { JsonProcessorRequestOptionsExtensions.JsonProcessorPropertyBagKey, "999" }
+                }
+            };
+
+            bool found = ro.TryReadJsonProcessorOverride(out JsonProcessor jp);
+            Assert.IsFalse(found);
+            Assert.AreEqual(JsonProcessor.Newtonsoft, jp);
+        }
+
+        [TestMethod]
         public void TryReadOverride_NullRequestOptions_Default()
         {
             RequestOptions roNull = null;
@@ -164,6 +180,40 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Tests
             RequestOptions ro = new ItemRequestOptions(); // Properties remains null
             JsonProcessor result = ro.GetJsonProcessor(JsonProcessor.Stream);
             Assert.AreEqual(JsonProcessor.Stream, result);
+        }
+
+        [TestMethod]
+        public void GetJsonProcessor_EncryptionItemOptions_CachesOverrideAndRemovesProperty()
+        {
+            EncryptionItemRequestOptions requestOptions = new ()
+            {
+                Properties = new Dictionary<string, object>
+                {
+                    { JsonProcessorRequestOptionsExtensions.JsonProcessorPropertyBagKey, "Stream" },
+                    { "unrelated", 123 },
+                },
+            };
+
+            Assert.AreEqual(JsonProcessor.Stream, requestOptions.GetJsonProcessor(JsonProcessor.Newtonsoft));
+            Assert.AreEqual(JsonProcessor.Stream, requestOptions.GetJsonProcessor(JsonProcessor.Newtonsoft));
+            Assert.IsFalse(requestOptions.Properties.ContainsKey(JsonProcessorRequestOptionsExtensions.JsonProcessorPropertyBagKey));
+            Assert.AreEqual(123, requestOptions.Properties["unrelated"]);
+        }
+
+        [TestMethod]
+        public void GetJsonProcessor_EncryptionBatchItemOptions_CachesOverrideAndRemovesProperty()
+        {
+            EncryptionTransactionalBatchItemRequestOptions requestOptions = new ()
+            {
+                Properties = new Dictionary<string, object>
+                {
+                    { JsonProcessorRequestOptionsExtensions.JsonProcessorPropertyBagKey, "Stream" },
+                },
+            };
+
+            Assert.AreEqual(JsonProcessor.Stream, requestOptions.GetJsonProcessor(JsonProcessor.Newtonsoft));
+            Assert.AreEqual(JsonProcessor.Stream, requestOptions.GetJsonProcessor(JsonProcessor.Newtonsoft));
+            Assert.IsNull(requestOptions.Properties);
         }
     }
 }

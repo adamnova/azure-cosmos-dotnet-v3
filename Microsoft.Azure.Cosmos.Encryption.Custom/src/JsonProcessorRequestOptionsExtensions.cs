@@ -5,6 +5,7 @@
 namespace Microsoft.Azure.Cosmos.Encryption.Custom
 {
     using System;
+    using System.Collections.Generic;
     using Microsoft.Azure.Cosmos;
 
     /// <summary>
@@ -28,17 +29,36 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         internal static bool TryReadJsonProcessorOverride(this RequestOptions requestOptions, out JsonProcessor jsonProcessor)
         {
             jsonProcessor = JsonProcessor.Newtonsoft;
+            JsonProcessor? typedOverride = requestOptions switch
+            {
+                EncryptionItemRequestOptions itemOptions => itemOptions.JsonProcessorOverride,
+                EncryptionTransactionalBatchItemRequestOptions batchItemOptions => batchItemOptions.JsonProcessorOverride,
+                _ => null,
+            };
+            if (typedOverride.HasValue)
+            {
+                jsonProcessor = typedOverride.Value;
+                return true;
+            }
+
             if (requestOptions?.Properties != null &&
                 requestOptions.Properties.TryGetValue(JsonProcessorPropertyBagKey, out object value) && value != null)
             {
                 if (value is JsonProcessor enumVal)
                 {
-                    jsonProcessor = enumVal;
-                    return true;
+                    if (Enum.IsDefined(typeof(JsonProcessor), enumVal))
+                    {
+                        jsonProcessor = enumVal;
+                        StoreInternalOverride(requestOptions, jsonProcessor);
+                        return true;
+                    }
                 }
-                else if (value is string s && Enum.TryParse(s, true, out JsonProcessor parsed))
+                else if (value is string s
+                    && Enum.TryParse(s, true, out JsonProcessor parsed)
+                    && Enum.IsDefined(typeof(JsonProcessor), parsed))
                 {
                     jsonProcessor = parsed;
+                    StoreInternalOverride(requestOptions, jsonProcessor);
                     return true;
                 }
             }
@@ -54,6 +74,30 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             }
 
             return defaultJsonProcessor;
+        }
+
+        private static void StoreInternalOverride(RequestOptions requestOptions, JsonProcessor jsonProcessor)
+        {
+            switch (requestOptions)
+            {
+                case EncryptionItemRequestOptions itemOptions:
+                    itemOptions.JsonProcessorOverride = jsonProcessor;
+                    break;
+                case EncryptionTransactionalBatchItemRequestOptions batchItemOptions:
+                    batchItemOptions.JsonProcessorOverride = jsonProcessor;
+                    break;
+                default:
+                    return;
+            }
+
+            Dictionary<string, object> properties = new ();
+            foreach (KeyValuePair<string, object> property in requestOptions.Properties)
+            {
+                properties[property.Key] = property.Value;
+            }
+
+            properties.Remove(JsonProcessorPropertyBagKey);
+            requestOptions.Properties = properties.Count == 0 ? null : properties;
         }
     }
 }

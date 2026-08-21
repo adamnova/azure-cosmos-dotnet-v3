@@ -33,8 +33,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             Exception innerException)
             : base(innerException.Message, innerException)
         {
-            this.DataEncryptionKeyId = dataEncryptionKeyId ?? throw new ArgumentNullException(dataEncryptionKeyId);
-            this.EncryptedContent = encryptedContent ?? throw new ArgumentNullException(encryptedContent);
+            // Incomplete metadata must not mask the original decrypt failure.
+            this.DataEncryptionKeyId = dataEncryptionKeyId ?? string.Empty;
+            this.EncryptedContent = encryptedContent ?? string.Empty;
         }
     }
 }
