@@ -1438,12 +1438,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             Assert.AreEqual(
                 LegacyPreview07FixtureSha256,
                 provenance["fixtureSha256"].Value<string>());
-            using SHA256 sha256 = SHA256.Create();
-            string fixtureHash = Convert.ToHexString(
-                sha256.ComputeHash(File.ReadAllBytes(fixturePath)));
-            Assert.AreEqual(
-                LegacyPreview07FixtureSha256,
-                fixtureHash);
+            VerifyLegacyPreview07FixtureHash(fixturePath);
 
             JObject fixture = JObject.Parse(File.ReadAllText(fixturePath));
             JObject dataEncryptionKey = (JObject)fixture["dataEncryptionKey"];
@@ -1482,6 +1477,16 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             }
 
             return fixture;
+        }
+
+        internal static void VerifyLegacyPreview07FixtureHash(string fixturePath)
+        {
+            using SHA256 sha256 = SHA256.Create();
+            string fixtureHash = Convert.ToHexString(
+                sha256.ComputeHash(File.ReadAllBytes(fixturePath)));
+            Assert.AreEqual(
+                LegacyPreview07FixtureSha256,
+                fixtureHash);
         }
 
         private static string CreateMigrationItemId(
