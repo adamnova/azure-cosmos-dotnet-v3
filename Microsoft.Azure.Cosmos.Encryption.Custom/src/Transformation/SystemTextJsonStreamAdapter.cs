@@ -143,6 +143,7 @@ internal sealed class SystemTextJsonStreamAdapter : IMdeJsonProcessorAdapter
         }
 #pragma warning restore CS0618
 
+        EncryptionProcessor.ValidateMdeEncryptionProperties(encryptionProperties);
         return encryptionProperties;
     }
 }

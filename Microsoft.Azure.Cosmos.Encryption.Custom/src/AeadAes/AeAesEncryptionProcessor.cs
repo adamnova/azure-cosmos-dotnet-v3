@@ -86,6 +86,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 throw new NotSupportedException($"Unknown encryption format version: {encryptionProperties.EncryptionFormatVersion}. Please upgrade your SDK to the latest version.");
             }
 
+            EncryptionProcessor.ValidateLegacyEncryptionProperties(encryptionProperties);
+
             byte[] plainText = await encryptor.DecryptAsync(
                 encryptionProperties.EncryptedData,
                 encryptionProperties.DataEncryptionKeyId,
@@ -97,13 +99,15 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             using (JsonTextReader jsonTextReader = new (streamReader))
             {
                 jsonTextReader.ArrayPool = JsonArrayPool.Instance;
+                jsonTextReader.DateParseHandling = DateParseHandling.None;
                 plainTextJObj = JObject.Load(jsonTextReader);
             }
 
+            JObject decryptedDocument = (JObject)document.DeepClone();
             List<string> pathsDecrypted = new ();
             foreach (JProperty property in plainTextJObj.Properties())
             {
-                document.Add(property.Name, property.Value);
+                decryptedDocument.Add(property.Name, property.Value);
                 pathsDecrypted.Add("/" + property.Name);
             }
 
@@ -111,7 +115,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 pathsDecrypted,
                 encryptionProperties.DataEncryptionKeyId);
 
-            document.Remove(Constants.EncryptedInfo);
+            decryptedDocument.Remove(Constants.EncryptedInfo);
+            EncryptionProcessor.ReplaceDocumentContents(document, decryptedDocument);
 
             return decryptionContext;
         }

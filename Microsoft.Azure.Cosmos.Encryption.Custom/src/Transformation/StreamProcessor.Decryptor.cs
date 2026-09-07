@@ -244,68 +244,94 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
         private EncryptionProperties TryExtractEncryptionProperties(byte[] buffer, int length)
         {
-            try
+            ReadOnlySpan<byte> document = new (buffer, 0, length);
+            Utf8JsonReader reader = new (document, JsonReaderOptions);
+            bool metadataInvalid = false;
+            int metadataStart = -1;
+            int metadataLength = 0;
+
+            while (reader.Read())
             {
-                ReadOnlySpan<byte> document = new (buffer, 0, length);
-                Utf8JsonReader reader = new (document, JsonReaderOptions);
-                int metadataStart = -1;
-                int metadataLength = 0;
-
-                while (reader.Read())
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
                 {
-                    if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
-                    {
-                        continue;
-                    }
-
-                    if (!reader.ValueTextEquals(this.encryptionPropertiesNameBytes))
-                    {
-                        if (!reader.TrySkip())
-                        {
-                            return null;
-                        }
-
-                        continue;
-                    }
-
-                    if (!reader.Read())
-                    {
-                        return null;
-                    }
-
-                    if (reader.TokenType == JsonTokenType.StartObject)
-                    {
-                        int objectStart = checked((int)reader.TokenStartIndex);
-                        if (!reader.TrySkip())
-                        {
-                            return null;
-                        }
-
-                        metadataStart = objectStart;
-                        metadataLength = checked((int)reader.BytesConsumed - objectStart);
-                    }
-                    else
-                    {
-                        if (!reader.TrySkip())
-                        {
-                            return null;
-                        }
-
-                        metadataStart = -1;
-                        metadataLength = 0;
-                    }
+                    continue;
                 }
 
-                return metadataStart < 0
-                    ? null
-                    : JsonSerializer.Deserialize<EncryptionProperties>(
-                        document.Slice(metadataStart, metadataLength),
-                        JsonSerializerOptions);
+                if (!reader.ValueTextEquals(this.encryptionPropertiesNameBytes))
+                {
+                    if (!reader.TrySkip())
+                    {
+                        throw new JsonException("Incomplete JSON value.");
+                    }
+
+                    continue;
+                }
+
+                if (!reader.Read())
+                {
+                    throw new JsonException($"Encryption metadata '{Constants.EncryptedInfo}' has no value.");
+                }
+
+                if (reader.TokenType == JsonTokenType.StartObject)
+                {
+                    int objectStart = checked((int)reader.TokenStartIndex);
+                    if (!reader.TrySkip())
+                    {
+                        throw new JsonException($"Encryption metadata '{Constants.EncryptedInfo}' is incomplete.");
+                    }
+
+                    metadataStart = objectStart;
+                    metadataLength = checked((int)reader.BytesConsumed - objectStart);
+                    metadataInvalid = false;
+                }
+                else if (reader.TokenType == JsonTokenType.Null)
+                {
+                    metadataStart = -1;
+                    metadataLength = 0;
+                    metadataInvalid = false;
+                }
+                else
+                {
+                    if (!reader.TrySkip())
+                    {
+                        throw new JsonException($"Encryption metadata '{Constants.EncryptedInfo}' is incomplete.");
+                    }
+
+                    metadataStart = -1;
+                    metadataLength = 0;
+                    metadataInvalid = true;
+                }
             }
-            catch (JsonException)
+
+            if (metadataInvalid)
+            {
+                throw new JsonException(
+                    $"Encryption metadata '{Constants.EncryptedInfo}' must be an object or null.");
+            }
+
+            if (metadataStart < 0)
             {
                 return null;
             }
+
+            EncryptionProperties encryptionProperties = JsonSerializer.Deserialize<EncryptionProperties>(
+                document.Slice(metadataStart, metadataLength),
+                JsonSerializerOptions);
+            if (string.IsNullOrEmpty(encryptionProperties.EncryptionAlgorithm))
+            {
+                return null;
+            }
+
+#pragma warning disable CS0618
+            if (encryptionProperties.EncryptionAlgorithm != CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized)
+            {
+                throw new NotSupportedException(
+                    $"JsonProcessor.Stream is not supported for encryption algorithm '{encryptionProperties.EncryptionAlgorithm}'. Only '{CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized}' is supported with the Stream processor.");
+            }
+#pragma warning restore CS0618
+
+            EncryptionProcessor.ValidateMdeEncryptionProperties(encryptionProperties);
+            return encryptionProperties;
         }
 
         internal async Task<DecryptionContext> DecryptStreamAsync(
@@ -389,6 +415,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                     JsonFeedStreamHelper.MaximumBufferSize);
             }
 
+            if (pathsDecrypted.Count != encryptedPathCount)
+            {
+                throw new InvalidOperationException(
+                    "Encrypted document does not contain valid ciphertext for every encrypted path.");
+            }
+
             writer.Flush();
 
             return EncryptionProcessor.CreateDecryptionContext(pathsDecrypted, properties.DataEncryptionKeyId);
@@ -449,6 +481,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                     }
 
                     continue;
+                }
+
+                if (decryptPropertyName != null && tokenType != JsonTokenType.String)
+                {
+                    throw new InvalidOperationException(
+                        $"Encrypted property '{decryptPropertyName}' must contain base64 ciphertext.");
                 }
 
                 switch (tokenType)
@@ -566,10 +604,17 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 throw new InvalidOperationException($"Base64 decoding failed: {status}");
             }
 
+            if (cipherTextLength == 0)
+            {
+                throw new InvalidOperationException("Encrypted property must contain non-empty ciphertext.");
+            }
+
+            TypeMarker typeMarker = (TypeMarker)cipherTextWithTypeMarker[0];
+            JObjectSqlSerializer.ValidateTypeMarker(typeMarker);
             (byte[] bytes, int processedBytes) = this.Encryptor.Decrypt(encryptionKey, cipherTextWithTypeMarker, cipherTextLength, arrayPoolManager);
 
             ReadOnlySpan<byte> bytesToWrite = bytes.AsSpan(0, processedBytes);
-            switch ((TypeMarker)cipherTextWithTypeMarker[0])
+            switch (typeMarker)
             {
                 case TypeMarker.String:
                     writer.WriteStringValue(bytesToWrite);
@@ -586,9 +631,29 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 case TypeMarker.Null: // Produced only if ciphertext was forged or future versions choose to encrypt nulls; current encryptor skips nulls.
                     writer.WriteNullValue();
                     break;
-                default:
+                case TypeMarker.Array:
+                    ValidateStructuredPayload(bytesToWrite, JsonTokenType.StartArray);
+                    writer.WriteRawValue(bytesToWrite, skipInputValidation: true);
+                    break;
+                case TypeMarker.Object:
+                    ValidateStructuredPayload(bytesToWrite, JsonTokenType.StartObject);
                     writer.WriteRawValue(bytesToWrite, true);
                     break;
+            }
+        }
+
+        private static void ValidateStructuredPayload(
+            ReadOnlySpan<byte> payload,
+            JsonTokenType expectedStartToken)
+        {
+            Utf8JsonReader reader = new (payload, isFinalBlock: true, state: default);
+            if (!reader.Read() ||
+                reader.TokenType != expectedStartToken ||
+                !reader.TrySkip() ||
+                reader.Read())
+            {
+                throw new JsonException(
+                    $"Decrypted structured payload is not a single valid {expectedStartToken} JSON value.");
             }
         }
 

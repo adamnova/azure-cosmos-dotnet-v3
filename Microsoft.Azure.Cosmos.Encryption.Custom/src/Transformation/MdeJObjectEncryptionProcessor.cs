@@ -110,35 +110,47 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 throw new NotSupportedException($"Unknown encryption format version: {encryptionProperties.EncryptionFormatVersion}. Please upgrade your SDK to the latest version.");
             }
 
+            EncryptionProcessor.ValidateMdeEncryptionProperties(encryptionProperties);
+
             using ArrayPoolManager arrayPoolManager = new ();
             using ArrayPoolManager<char> charPoolManager = new ();
 
             DataEncryptionKey encryptionKey = await encryptor.GetEncryptionKeyAsync(encryptionProperties.DataEncryptionKeyId, encryptionProperties.EncryptionAlgorithm, cancellationToken);
 
             List<string> pathsDecrypted = new (encryptionProperties.EncryptedPaths.Count());
+            JObject decryptedDocument = (JObject)document.DeepClone();
 
             foreach (string path in encryptionProperties.EncryptedPaths)
             {
                 string propertyName = path.Substring(1);
 
-                if (!document.TryGetValue(propertyName, out JToken propertyValue))
+                if (!decryptedDocument.TryGetValue(propertyName, out JToken propertyValue))
                 {
-                    // malformed document, such record shouldn't be there at all
-                    continue;
+                    throw new InvalidOperationException(
+                        $"Encrypted property '{path}' is missing from the document.");
+                }
+
+                if (propertyValue.Type != JTokenType.String)
+                {
+                    throw new InvalidOperationException(
+                        $"Encrypted property '{path}' must contain base64 ciphertext.");
                 }
 
                 byte[] cipherTextWithTypeMarker = propertyValue.ToObject<byte[]>();
-                if (cipherTextWithTypeMarker == null)
+                if (cipherTextWithTypeMarker == null || cipherTextWithTypeMarker.Length == 0)
                 {
-                    continue;
+                    throw new InvalidOperationException(
+                        $"Encrypted property '{path}' must contain non-empty ciphertext.");
                 }
 
+                TypeMarker typeMarker = (TypeMarker)cipherTextWithTypeMarker[0];
+                JObjectSqlSerializer.ValidateTypeMarker(typeMarker);
                 (byte[] bytes, int processedBytes) = this.Encryptor.Decrypt(encryptionKey, cipherTextWithTypeMarker, cipherTextWithTypeMarker.Length, arrayPoolManager);
 
                 this.Serializer.DeserializeAndAddProperty(
-                    (TypeMarker)cipherTextWithTypeMarker[0],
+                    typeMarker,
                     bytes.AsSpan(0, processedBytes),
-                    document,
+                    decryptedDocument,
                     propertyName,
                     charPoolManager);
 
@@ -149,7 +161,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 pathsDecrypted,
                 encryptionProperties.DataEncryptionKeyId);
 
-            document.Remove(Constants.EncryptedInfo);
+            decryptedDocument.Remove(Constants.EncryptedInfo);
+            EncryptionProcessor.ReplaceDocumentContents(document, decryptedDocument);
             return decryptionContext;
         }
     }

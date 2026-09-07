@@ -114,7 +114,7 @@ internal sealed class NewtonsoftAdapter : IMdeJsonProcessorAdapter
     {
         input.Position = 0;
         JObject itemJObj = this.ReadJObject(input);
-        JObject encryptionProperties = this.RetrieveEncryptionProperties(itemJObj);
+        JObject encryptionProperties = EncryptionProcessor.RetrieveEncryptionProperties(itemJObj);
         if (encryptionProperties == null)
         {
             input.Position = 0;
@@ -148,16 +148,5 @@ internal sealed class NewtonsoftAdapter : IMdeJsonProcessorAdapter
         };
 
         return Newtonsoft.Json.JsonSerializer.Create(settings).Deserialize<JObject>(jsonTextReader);
-    }
-
-    private JObject RetrieveEncryptionProperties(JObject item)
-    {
-        JProperty encryptionPropertiesJProp = item.Property(Constants.EncryptedInfo);
-        if (encryptionPropertiesJProp?.Value is JObject jObject)
-        {
-            return jObject;
-        }
-
-        return null;
     }
 }

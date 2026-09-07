@@ -33,8 +33,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
         /// <summary>
         /// Returns the parsed <see cref="EncryptionProperties"/> from the <c>_ei</c> subtree,
-        /// or <see langword="null"/> if the root object has no <c>_ei</c> property. Requires
-        /// a seekable stream and leaves <see cref="Stream.Position"/> at 0 on return.
+        /// or <see langword="null"/> if the root object has no <c>_ei</c> property or its value
+        /// is JSON null. Requires a seekable stream and leaves <see cref="Stream.Position"/> at
+        /// 0 on return.
         /// </summary>
         public static ValueTask<EncryptionProperties> ReadAsync(
             Stream input,
@@ -131,18 +132,28 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
         private struct MetadataCandidate
         {
+            private bool invalid;
             private byte[] json;
             private bool seen;
 
             public void SetNull()
             {
+                this.invalid = false;
                 this.json = null;
                 this.seen = true;
             }
 
             public void SetJson(ReadOnlySpan<byte> value)
             {
+                this.invalid = false;
                 this.json = value.ToArray();
+                this.seen = true;
+            }
+
+            public void SetInvalid()
+            {
+                this.invalid = true;
+                this.json = null;
                 this.seen = true;
             }
 
@@ -151,6 +162,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 if (!this.seen)
                 {
                     return null;
+                }
+
+                if (this.invalid)
+                {
+                    throw new JsonException(
+                        $"Encryption metadata '{Constants.EncryptedInfo}' must be an object or null.");
                 }
 
                 return this.json == null
@@ -206,7 +223,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                                 return new ChunkOutcome(ScanResult.NeedMore, safeConsumed, safeState);
                             }
 
-                            metadataCandidate.SetNull();
+                            metadataCandidate.SetInvalid();
                         }
                     }
 

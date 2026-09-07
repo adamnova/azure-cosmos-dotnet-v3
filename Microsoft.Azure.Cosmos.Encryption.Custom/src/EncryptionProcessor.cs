@@ -581,6 +581,54 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             return encryptionAlgorithm == null || encryptionAlgorithm.Value.Type == JTokenType.Null;
         }
 
+        internal static void ValidateMdeEncryptionProperties(EncryptionProperties encryptionProperties)
+        {
+            ValidateCommonEncryptionProperties(encryptionProperties);
+            if (encryptionProperties.EncryptedData != null)
+            {
+                throw new InvalidOperationException("MDE encryption metadata must not contain envelope ciphertext.");
+            }
+        }
+
+        internal static void ValidateLegacyEncryptionProperties(EncryptionProperties encryptionProperties)
+        {
+            ValidateCommonEncryptionProperties(encryptionProperties);
+            if (encryptionProperties.EncryptedData == null || encryptionProperties.EncryptedData.Length == 0)
+            {
+                throw new InvalidOperationException("Legacy encryption metadata must contain non-empty ciphertext.");
+            }
+        }
+
+        internal static void ReplaceDocumentContents(JObject destination, JObject source)
+        {
+            destination.RemoveAll();
+            foreach (JProperty property in source.Properties())
+            {
+                destination.Add(property.Name, property.Value.DeepClone());
+            }
+        }
+
+        private static void ValidateCommonEncryptionProperties(EncryptionProperties encryptionProperties)
+        {
+            if (string.IsNullOrEmpty(encryptionProperties.DataEncryptionKeyId))
+            {
+                throw new InvalidOperationException("Encryption metadata must contain a data encryption key id.");
+            }
+
+            if (encryptionProperties.EncryptedPaths == null)
+            {
+                throw new InvalidOperationException("Encryption metadata must contain encrypted paths.");
+            }
+
+            foreach (string path in encryptionProperties.EncryptedPaths)
+            {
+                if (string.IsNullOrEmpty(path) || path.Length == 1 || path[0] != '/')
+                {
+                    throw new InvalidOperationException($"Encryption metadata contains an invalid encrypted path: '{path}'.");
+                }
+            }
+        }
+
         private static JObject RetrieveItem(
             Stream input)
         {
@@ -598,17 +646,24 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             return Newtonsoft.Json.JsonSerializer.Create(jsonSerializerSettings).Deserialize<JObject>(jsonTextReader);
         }
 
-        private static JObject RetrieveEncryptionProperties(
+        internal static JObject RetrieveEncryptionProperties(
             JObject item)
         {
             JProperty encryptionPropertiesJProp = item.Property(Constants.EncryptedInfo);
-            JObject encryptionPropertiesJObj = null;
-            if (encryptionPropertiesJProp?.Value != null && encryptionPropertiesJProp.Value.Type == JTokenType.Object)
+            if (encryptionPropertiesJProp == null ||
+                encryptionPropertiesJProp.Value == null ||
+                encryptionPropertiesJProp.Value.Type == JTokenType.Null)
             {
-                encryptionPropertiesJObj = (JObject)encryptionPropertiesJProp.Value;
+                return null;
             }
 
-            return encryptionPropertiesJObj;
+            if (encryptionPropertiesJProp.Value is not JObject encryptionProperties)
+            {
+                throw new JsonSerializationException(
+                    $"Encryption metadata '{Constants.EncryptedInfo}' must be an object or null.");
+            }
+
+            return encryptionProperties;
         }
 
         internal static Task<List<DecryptableItem>> ConvertResponseToDecryptableItemsAsync(
