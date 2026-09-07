@@ -24,6 +24,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
     [TestClass]
     public class EncryptionTransactionalBatchTests
     {
+        private const string OverlapExceptionMessage =
+            "The transactional batch cannot be modified or executed while an execution is in progress.";
+
         [TestMethod]
         public async Task ExecuteAsync_SnapshotsReusedOptionsForMixedOperationsByIndex()
         {
@@ -263,53 +266,344 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 activity.DisplayName == CosmosDiagnosticsContext.ScopeDecryptModeSelectionPrefix + JsonProcessor.Newtonsoft));
         }
 
-        [TestMethod]
-        public async Task ExecuteAsync_OverlappingAdditionBelongsToNextExecution()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ExecuteAsync_OverlappingAdditionIsRejectedBeforeDeferredSnapshot(
+            bool useRequestOptions)
         {
-            Mock<TransactionalBatchResponse> firstResponse = CreateResponse();
-            Mock<TransactionalBatchResponse> secondResponse = CreateResponse();
-            TaskCompletionSource<TransactionalBatchResponse> firstExecution = new (
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<bool> delegated = new (
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            int executionCount = 0;
-            Mock<TransactionalBatch> inner = new ();
-            inner.Setup(b => b.ReadItem(
-                    It.IsAny<string>(),
-                    It.IsAny<TransactionalBatchItemRequestOptions>()))
-                .Returns(inner.Object);
-            inner.Setup(b => b.ExecuteAsync(It.IsAny<CancellationToken>()))
-                .Returns(() =>
-                {
-                    if (Interlocked.Increment(ref executionCount) == 1)
-                    {
-                        delegated.SetResult(true);
-                        return firstExecution.Task;
-                    }
-
-                    return Task.FromResult(secondResponse.Object);
-                });
-            EncryptionTransactionalBatch batch = CreateBatch(inner);
-            List<Activity> activities = new ();
-            using ActivityListener listener = CreateActivityListener(activities);
+            DeferredSnapshotTransactionalBatch inner = new ();
+            EncryptionTransactionalBatch batch = new (
+                inner,
+                Mock.Of<Encryptor>(),
+                Mock.Of<CosmosSerializer>(),
+                JsonProcessor.Newtonsoft);
 
             batch.ReadItem("first", CreateItemOptions(JsonProcessor.Stream));
-            Task<TransactionalBatchResponse> firstTask = batch.ExecuteAsync();
-            await delegated.Task;
+            Task<TransactionalBatchResponse> firstTask = ExecuteAsync(batch, useRequestOptions);
+            await inner.ExecuteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Exception overlapException = CaptureException(
+                () => batch.ReadItem("overlap", CreateItemOptions(JsonProcessor.Newtonsoft)));
+            int operationCountBeforeSnapshot = inner.OperationCount;
+            int executeCallCount = inner.ExecuteCallCount;
+
+            inner.AllowSnapshot();
+            Exception executionException = await CaptureExceptionAsync(async () =>
+            {
+                using (await firstTask)
+                {
+                }
+            });
+
+            AssertBusyException(overlapException);
+            Assert.AreEqual(1, operationCountBeforeSnapshot);
+            Assert.AreEqual(1, executeCallCount);
+            Assert.IsNull(executionException);
             batch.ReadItem("second", CreateItemOptions(JsonProcessor.Newtonsoft));
-            firstExecution.SetResult(firstResponse.Object);
-            using (await firstTask)
+            using (await ExecuteAsync(batch, useRequestOptions))
             {
             }
 
+            Assert.AreEqual(2, inner.ExecuteCallCount);
+        }
+
+        [DataTestMethod]
+        [DataRow("CreateItem")]
+        [DataRow("CreateItemStream")]
+        [DataRow("ReplaceItem")]
+        [DataRow("ReplaceItemStream")]
+        [DataRow("UpsertItem")]
+        [DataRow("UpsertItemStream")]
+        [DataRow("DeleteItem")]
+        [DataRow("ReadItem")]
+        [DataRow("PatchItem")]
+        public async Task ExecuteAsync_RejectsEveryMutationBeforeSideEffects(string operation)
+        {
+            DeferredSnapshotTransactionalBatch inner = new ();
+            Mock<Encryptor> encryptor = CreateMdeEncryptor("dekId");
+            Mock<CosmosSerializer> serializer = new ();
+            serializer.Setup(instance => instance.ToStream(It.IsAny<TestCommon.TestDoc>()))
+                .Returns<TestCommon.TestDoc>(document => document.ToStream());
+            EncryptionTransactionalBatch batch = new (
+                inner,
+                encryptor.Object,
+                serializer.Object,
+                JsonProcessor.Newtonsoft);
+            batch.ReadItem("first");
+            Task<TransactionalBatchResponse> executeTask = batch.ExecuteAsync();
+            await inner.ExecuteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Exception overlapException = CaptureException(() => AddOperation(batch, operation));
+            int operationCountBeforeSnapshot = inner.OperationCount;
+            int executeCallCount = inner.ExecuteCallCount;
+
+            inner.AllowSnapshot();
+            Exception executionException = await CaptureExceptionAsync(async () =>
+            {
+                using (await executeTask)
+                {
+                }
+            });
+
+            AssertBusyException(overlapException);
+            Assert.AreEqual(1, operationCountBeforeSnapshot);
+            Assert.AreEqual(1, executeCallCount);
+            Assert.IsNull(executionException);
+            serializer.Verify(
+                instance => instance.ToStream(It.IsAny<TestCommon.TestDoc>()),
+                Times.Never());
+            encryptor.Verify(
+                instance => instance.GetEncryptionKeyAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never());
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(false, true)]
+        [DataRow(true, false)]
+        [DataRow(true, true)]
+        public async Task ExecuteAsync_ConcurrentExecutionIsRejectedBeforeInnerDelegation(
+            bool firstUsesRequestOptions,
+            bool secondUsesRequestOptions)
+        {
+            DeferredSnapshotTransactionalBatch inner = new ();
+            EncryptionTransactionalBatch batch = new (
+                inner,
+                Mock.Of<Encryptor>(),
+                Mock.Of<CosmosSerializer>(),
+                JsonProcessor.Newtonsoft);
+            batch.ReadItem("first");
+            Task<TransactionalBatchResponse> firstTask = ExecuteAsync(batch, firstUsesRequestOptions);
+            await inner.ExecuteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            TransactionalBatchRequestOptions secondOptions = new ()
+            {
+                Properties = new ThrowingReadOnlyDictionary(
+                    JsonProcessorRequestOptionsExtensions.JsonProcessorPropertyBagKey,
+                    JsonProcessor.Stream),
+            };
+            Task<TransactionalBatchResponse> secondTask = secondUsesRequestOptions
+                ? batch.ExecuteAsync(secondOptions)
+                : batch.ExecuteAsync();
+
+            inner.AllowSnapshot();
+            Exception firstException = await CaptureExceptionAsync(async () =>
+            {
+                using (await firstTask)
+                {
+                }
+            });
+            Exception secondException = await CaptureExceptionAsync(async () =>
+            {
+                using (await secondTask)
+                {
+                }
+            });
+
+            Assert.IsNull(firstException);
+            AssertBusyException(secondException);
+            Assert.AreEqual(1, inner.ExecuteCallCount);
+        }
+
+        [TestMethod]
+        public async Task ExecuteAsync_RejectsMutationUntilResponseDecryptionCompletes()
+        {
+            const string dekId = "dekId";
+            Mock<Encryptor> sourceEncryptor = CreateMdeEncryptor(dekId);
+            TrackingStream encryptedStream = await CreateTrackingEncryptedPayloadAsync(sourceEncryptor.Object);
+            TaskCompletionSource<bool> decryptEntered = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<bool> allowDecrypt = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Mock<Encryptor> blockingEncryptor = new ();
+            blockingEncryptor.Setup(instance => instance.GetEncryptionKeyAsync(
+                    dekId,
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((string id, string algorithm, CancellationToken cancellationToken) =>
+                    WaitForKeyAsync(
+                        sourceEncryptor.Object,
+                        id,
+                        algorithm,
+                        cancellationToken,
+                        decryptEntered,
+                        allowDecrypt.Task));
+            Mock<TransactionalBatchResponse> response = CreateResponse(
+                resultStreamFactory: _ => encryptedStream);
+            Mock<TransactionalBatch> inner = new ();
+            inner.Setup(instance => instance.ReadItem(
+                    It.IsAny<string>(),
+                    It.IsAny<TransactionalBatchItemRequestOptions>()))
+                .Returns(inner.Object);
+            inner.Setup(instance => instance.ExecuteAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(response.Object);
+            EncryptionTransactionalBatch batch = CreateBatch(inner, blockingEncryptor.Object);
+            batch.ReadItem("first");
+            Task<TransactionalBatchResponse> executeTask = batch.ExecuteAsync();
+            await decryptEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Exception overlapException = CaptureException(() => batch.ReadItem("overlap"));
+
+            allowDecrypt.SetResult(true);
+            using (await executeTask)
+            {
+            }
+
+            AssertBusyException(overlapException);
+            inner.Verify(
+                instance => instance.ReadItem(
+                    It.IsAny<string>(),
+                    It.IsAny<TransactionalBatchItemRequestOptions>()),
+                Times.Once());
+        }
+
+        [TestMethod]
+        public async Task CreateItem_WhenSerializationIsActive_RejectsExecuteBeforeDispatch()
+        {
+            DeferredSnapshotTransactionalBatch inner = new ();
+            inner.AllowSnapshot();
+            TaskCompletionSource<bool> serializerEntered = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<bool> allowSerializer = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Mock<CosmosSerializer> serializer = new ();
+            serializer.Setup(instance => instance.ToStream(It.IsAny<TestCommon.TestDoc>()))
+                .Returns<TestCommon.TestDoc>(document =>
+                {
+                    serializerEntered.SetResult(true);
+                    allowSerializer.Task.GetAwaiter().GetResult();
+                    return document.ToStream();
+                });
+            EncryptionTransactionalBatch batch = new (
+                inner,
+                CreateMdeEncryptor("dekId").Object,
+                serializer.Object,
+                JsonProcessor.Newtonsoft);
+            Task mutationTask = Task.Run(() => batch.CreateItem(
+                TestCommon.TestDoc.Create(),
+                CreateEncryptionItemOptions()));
+            await serializerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Exception overlapException;
+            try
+            {
+                overlapException = await CaptureExceptionAsync(async () =>
+                {
+                    using (await batch.ExecuteAsync())
+                    {
+                    }
+                });
+            }
+            finally
+            {
+                allowSerializer.SetResult(true);
+                await mutationTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            AssertBusyException(overlapException);
+            Assert.AreEqual(0, inner.ExecuteCallCount);
             using (await batch.ExecuteAsync())
             {
             }
 
-            Assert.AreEqual(1, activities.Count(activity =>
-                activity.DisplayName == CosmosDiagnosticsContext.ScopeDecryptModeSelectionPrefix + JsonProcessor.Stream));
-            Assert.AreEqual(1, activities.Count(activity =>
-                activity.DisplayName == CosmosDiagnosticsContext.ScopeDecryptModeSelectionPrefix + JsonProcessor.Newtonsoft));
+            Assert.AreEqual(1, inner.ExecuteCallCount);
+        }
+
+        [TestMethod]
+        public async Task CreateItem_WhenSerializerReentersExecute_RejectsWithoutDeadlock()
+        {
+            DeferredSnapshotTransactionalBatch inner = new ();
+            inner.AllowSnapshot();
+            EncryptionTransactionalBatch batch = null;
+            Exception reentrantException = null;
+            Mock<CosmosSerializer> serializer = new ();
+            serializer.Setup(instance => instance.ToStream(It.IsAny<TestCommon.TestDoc>()))
+                .Returns<TestCommon.TestDoc>(document =>
+                {
+                    reentrantException = CaptureException(
+                        () => batch.ExecuteAsync().GetAwaiter().GetResult());
+                    return document.ToStream();
+                });
+            batch = new EncryptionTransactionalBatch(
+                inner,
+                CreateMdeEncryptor("dekId").Object,
+                serializer.Object,
+                JsonProcessor.Newtonsoft);
+
+            await Task.Run(() => batch.CreateItem(
+                    TestCommon.TestDoc.Create(),
+                    CreateEncryptionItemOptions()))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            AssertBusyException(reentrantException);
+            Assert.AreEqual(0, inner.ExecuteCallCount);
+            using (await batch.ExecuteAsync())
+            {
+            }
+
+            Assert.AreEqual(1, inner.ExecuteCallCount);
+        }
+
+        [TestMethod]
+        public void GetOperationResultAtIndex_PreservesPerOperationMetadata()
+        {
+            TimeSpan successRetryAfter = TimeSpan.FromSeconds(1);
+            TimeSpan failureRetryAfter = TimeSpan.FromSeconds(2);
+            TimeSpan nullResourceRetryAfter = TimeSpan.FromSeconds(3);
+            TransactionalBatchOperationResult[] results =
+            {
+                CreateOperationResult(
+                    HttpStatusCode.Created,
+                    isSuccessStatusCode: true,
+                    etag: "success-etag",
+                    successRetryAfter,
+                    new MemoryStream(Encoding.UTF8.GetBytes("{\"id\":\"success\"}"))),
+                CreateOperationResult(
+                    HttpStatusCode.BadRequest,
+                    isSuccessStatusCode: false,
+                    etag: "failure-etag",
+                    failureRetryAfter,
+                    new MemoryStream(Encoding.UTF8.GetBytes("{\"id\":\"failure\"}"))),
+                CreateOperationResult(
+                    HttpStatusCode.FailedDependency,
+                    isSuccessStatusCode: false,
+                    etag: "null-resource-etag",
+                    nullResourceRetryAfter,
+                    resourceStream: null),
+            };
+            Mock<CosmosSerializer> serializer = new ();
+            serializer.Setup(instance => instance.FromStream<TestResultResource>(It.IsAny<Stream>()))
+                .Returns<Stream>(stream => TestCommon.FromStream<TestResultResource>(stream));
+            using EncryptionTransactionalBatchResponse response = new (
+                results,
+                Mock.Of<TransactionalBatchResponse>(),
+                serializer.Object);
+
+            for (int index = 0; index < results.Length; index++)
+            {
+                TransactionalBatchOperationResult indexedResult = response[index];
+                TransactionalBatchOperationResult<TestResultResource> typedResult =
+                    response.GetOperationResultAtIndex<TestResultResource>(index);
+
+                Assert.AreEqual(indexedResult.StatusCode, typedResult.StatusCode, $"StatusCode at index {index}");
+                Assert.AreEqual(
+                    indexedResult.IsSuccessStatusCode,
+                    typedResult.IsSuccessStatusCode,
+                    $"IsSuccessStatusCode at index {index}");
+                Assert.AreEqual(indexedResult.ETag, typedResult.ETag, $"ETag at index {index}");
+                Assert.AreEqual(indexedResult.RetryAfter, typedResult.RetryAfter, $"RetryAfter at index {index}");
+                if (indexedResult.ResourceStream == null)
+                {
+                    Assert.IsNull(typedResult.Resource, $"Resource at index {index}");
+                }
+                else
+                {
+                    Assert.IsNotNull(typedResult.Resource, $"Resource at index {index}");
+                }
+            }
         }
 
         [TestMethod]
@@ -900,6 +1194,127 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 : batch.ExecuteAsync();
         }
 
+        private static void AddOperation(
+            EncryptionTransactionalBatch batch,
+            string operation)
+        {
+            TestCommon.TestDoc document = TestCommon.TestDoc.Create();
+            EncryptionTransactionalBatchItemRequestOptions encryptionOptions =
+                CreateEncryptionItemOptions();
+            MemoryStream payload = new (
+                Encoding.UTF8.GetBytes("{\"id\":\"overlap\",\"SensitiveStr\":\"secret\"}"));
+
+            switch (operation)
+            {
+                case "CreateItem":
+                    batch.CreateItem(document, encryptionOptions);
+                    break;
+                case "CreateItemStream":
+                    batch.CreateItemStream(payload, encryptionOptions);
+                    break;
+                case "ReplaceItem":
+                    batch.ReplaceItem(document.Id, document, encryptionOptions);
+                    break;
+                case "ReplaceItemStream":
+                    batch.ReplaceItemStream(document.Id, payload, encryptionOptions);
+                    break;
+                case "UpsertItem":
+                    batch.UpsertItem(document, encryptionOptions);
+                    break;
+                case "UpsertItemStream":
+                    batch.UpsertItemStream(payload, encryptionOptions);
+                    break;
+                case "DeleteItem":
+                    batch.DeleteItem(document.Id);
+                    break;
+                case "ReadItem":
+                    batch.ReadItem(document.Id);
+                    break;
+                case "PatchItem":
+                    batch.PatchItem(
+                        document.Id,
+                        new[] { PatchOperation.Set("/SensitiveStr", "updated") });
+                    break;
+                default:
+                    Assert.Fail($"Unknown operation: {operation}");
+                    break;
+            }
+        }
+
+        private static EncryptionTransactionalBatchItemRequestOptions CreateEncryptionItemOptions()
+        {
+            return new EncryptionTransactionalBatchItemRequestOptions
+            {
+                EncryptionOptions = new EncryptionOptions
+                {
+                    DataEncryptionKeyId = "dekId",
+                    EncryptionAlgorithm = CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized,
+                    PathsToEncrypt = TestCommon.TestDoc.PathsToEncrypt,
+                },
+            };
+        }
+
+        private static TransactionalBatchOperationResult CreateOperationResult(
+            HttpStatusCode statusCode,
+            bool isSuccessStatusCode,
+            string etag,
+            TimeSpan retryAfter,
+            Stream resourceStream)
+        {
+            Mock<TransactionalBatchOperationResult> result = new ();
+            result.SetupGet(instance => instance.StatusCode).Returns(statusCode);
+            result.SetupGet(instance => instance.IsSuccessStatusCode).Returns(isSuccessStatusCode);
+            result.SetupGet(instance => instance.ETag).Returns(etag);
+            result.SetupGet(instance => instance.RetryAfter).Returns(retryAfter);
+            result.SetupGet(instance => instance.ResourceStream).Returns(resourceStream);
+            return result.Object;
+        }
+
+        private static void AssertBusyException(Exception exception)
+        {
+            Assert.IsInstanceOfType(exception, typeof(InvalidOperationException));
+            Assert.AreEqual(OverlapExceptionMessage, exception.Message);
+        }
+
+        private static Exception CaptureException(Action action)
+        {
+            try
+            {
+                action();
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+
+        private static async Task<Exception> CaptureExceptionAsync(Func<Task> action)
+        {
+            try
+            {
+                await action();
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+
+        private static async Task<DataEncryptionKey> WaitForKeyAsync(
+            Encryptor encryptor,
+            string id,
+            string algorithm,
+            CancellationToken cancellationToken,
+            TaskCompletionSource<bool> entered,
+            Task allowed)
+        {
+            entered.SetResult(true);
+            await allowed;
+            return await encryptor.GetEncryptionKeyAsync(id, algorithm, cancellationToken);
+        }
+
         private static EncryptionOptions CreateLegacyEncryptionOptions(string dekId)
         {
 #pragma warning disable CS0618
@@ -1027,6 +1442,126 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             }
 
             IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+        }
+
+        private sealed class DeferredSnapshotTransactionalBatch : TransactionalBatch
+        {
+            private readonly TaskCompletionSource<bool> allowSnapshot = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource<bool> executeEntered = new (
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            private int executeCallCount;
+            private int operationCount;
+
+            public Task ExecuteEntered => this.executeEntered.Task;
+
+            public int ExecuteCallCount => Volatile.Read(ref this.executeCallCount);
+
+            public int OperationCount => Volatile.Read(ref this.operationCount);
+
+            public void AllowSnapshot()
+            {
+                this.allowSnapshot.TrySetResult(true);
+            }
+
+            public override TransactionalBatch CreateItem<T>(
+                T item,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch CreateItemStream(
+                Stream streamPayload,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch DeleteItem(
+                string id,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch ReadItem(
+                string id,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch ReplaceItem<T>(
+                string id,
+                T item,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch ReplaceItemStream(
+                string id,
+                Stream streamPayload,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch UpsertItem<T>(
+                T item,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch UpsertItemStream(
+                Stream streamPayload,
+                TransactionalBatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override TransactionalBatch PatchItem(
+                string id,
+                IReadOnlyList<PatchOperation> patchOperations,
+                TransactionalBatchPatchItemRequestOptions requestOptions = null)
+            {
+                return this.AddOperation();
+            }
+
+            public override Task<TransactionalBatchResponse> ExecuteAsync(
+                CancellationToken cancellationToken = default)
+            {
+                return this.ExecuteCoreAsync();
+            }
+
+            public override Task<TransactionalBatchResponse> ExecuteAsync(
+                TransactionalBatchRequestOptions requestOptions,
+                CancellationToken cancellationToken = default)
+            {
+                return this.ExecuteCoreAsync();
+            }
+
+            private TransactionalBatch AddOperation()
+            {
+                Interlocked.Increment(ref this.operationCount);
+                return this;
+            }
+
+            private async Task<TransactionalBatchResponse> ExecuteCoreAsync()
+            {
+                Interlocked.Increment(ref this.executeCallCount);
+                this.executeEntered.TrySetResult(true);
+                await this.allowSnapshot.Task;
+                int snapshotCount = Interlocked.Exchange(ref this.operationCount, 0);
+                return CreateResponse(resultCount: snapshotCount).Object;
+            }
+        }
+
+        private sealed class TestResultResource
+        {
+            public string Id { get; set; }
         }
 
         private sealed class TrackingStream : MemoryStream
