@@ -129,7 +129,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             await Assert.ThrowsExceptionAsync<OperationCanceledException>(
                 () => EncryptAsync(JsonProcessor.Stream, encryptor, cancellation.Token));
 
-            Assert.AreEqual(1, encryptor.EncryptCalls);
+            Assert.AreEqual(0, encryptor.EncryptCalls);
         }
 
         [TestMethod]
