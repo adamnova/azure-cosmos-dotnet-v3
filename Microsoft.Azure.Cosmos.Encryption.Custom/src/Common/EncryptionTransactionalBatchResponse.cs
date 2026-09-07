@@ -39,7 +39,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 resource = this.cosmosSerializer.FromStream<T>(result.ResourceStream);
             }
 
-            return new EncryptionTransactionalBatchOperationResult<T>(resource);
+            return new EncryptionTransactionalBatchOperationResult<T>(result, resource);
         }
 
         public override IEnumerator<TransactionalBatchOperationResult> GetEnumerator()
