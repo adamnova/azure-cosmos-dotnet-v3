@@ -691,12 +691,17 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
             Stream content,
             Encryptor encryptor,
             JsonProcessor jsonProcessor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool returnInputIfUnchanged = false)
         {
             return jsonProcessor switch
             {
 #if NET8_0_OR_GREATER
-                JsonProcessor.Stream => await DecryptJsonArrayStreamAsync(content, encryptor, cancellationToken),
+                JsonProcessor.Stream => await DecryptJsonArrayStreamAsync(
+                    content,
+                    encryptor,
+                    cancellationToken,
+                    returnInputIfUnchanged),
 #endif
                 _ => await DecryptJsonArrayNewtonsoftAsync(content, encryptor, cancellationToken),
             };
@@ -782,22 +787,15 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         private static async Task<Stream> DecryptJsonArrayStreamAsync(
             Stream content,
             Encryptor encryptor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool returnInputIfUnchanged)
         {
-            try
-            {
-                return await MdeEncryptionProcessor.DecryptJsonArrayStreamInPlaceAsync(
-                    content,
-                    encryptor,
-                    CosmosDiagnosticsContext.Create(null),
-                    cancellationToken);
-            }
-            catch (NotSupportedException)
-            {
-                content.Position = 0;
-
-                return await DecryptJsonArrayNewtonsoftAsync(content, encryptor, cancellationToken);
-            }
+            return await MdeEncryptionProcessor.DecryptJsonArrayStreamAsync(
+                content,
+                encryptor,
+                CosmosDiagnosticsContext.Create(null),
+                cancellationToken,
+                returnInputIfUnchanged);
         }
 #endif
 

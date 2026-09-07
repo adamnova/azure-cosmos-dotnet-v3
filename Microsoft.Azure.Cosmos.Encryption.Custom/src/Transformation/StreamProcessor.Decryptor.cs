@@ -52,7 +52,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             using RentArrayBufferWriter objectBuffer = new (InitialBufferSize);
             using RentArrayBufferWriter decryptedObjectBuffer = new (InitialBufferSize);
 
-            await this.ProcessJsonArrayStreamAsync(
+            _ = await this.ProcessJsonArrayStreamAsync(
                 stream,
                 encryptor,
                 diagnosticsContext,
@@ -64,7 +64,60 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             OverwriteStreamInPlace(stream, tempOutputStream);
         }
 
-        private async Task ProcessJsonArrayStreamAsync(
+        internal async Task<Stream> DecryptJsonArrayStreamAsync(
+            Stream stream,
+            Encryptor encryptor,
+            CosmosDiagnosticsContext diagnosticsContext,
+            CancellationToken cancellationToken,
+            bool returnInputIfUnchanged)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            ArgumentNullException.ThrowIfNull(encryptor);
+            ArgumentNullException.ThrowIfNull(diagnosticsContext);
+
+            if (!stream.CanRead)
+            {
+                throw new NotSupportedException("Stream must support read operations for decryption.");
+            }
+
+            if (stream.CanSeek)
+            {
+                stream.Position = 0;
+            }
+
+            PooledMemoryStream outputStream = new (InitialBufferSize);
+            try
+            {
+                using RentArrayBufferWriter objectBuffer = new (InitialBufferSize);
+                using RentArrayBufferWriter decryptedObjectBuffer = new (InitialBufferSize);
+
+                bool decrypted = await this.ProcessJsonArrayStreamAsync(
+                    stream,
+                    encryptor,
+                    diagnosticsContext,
+                    outputStream,
+                    objectBuffer,
+                    decryptedObjectBuffer,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!decrypted && returnInputIfUnchanged && stream.CanSeek)
+                {
+                    await outputStream.DisposeAsync().ConfigureAwait(false);
+                    stream.Position = 0;
+                    return stream;
+                }
+
+                outputStream.Position = 0;
+                return outputStream;
+            }
+            catch
+            {
+                await outputStream.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        private async Task<bool> ProcessJsonArrayStreamAsync(
             Stream stream,
             Encryptor encryptor,
             CosmosDiagnosticsContext diagnosticsContext,
@@ -78,6 +131,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
             bool isFinalBlock = false;
             int leftOver = 0;
+            bool decrypted = false;
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(InitialBufferSize);
 
@@ -114,7 +168,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
                     if (result.ObjectCompleted)
                     {
-                        await this.ProcessCapturedObjectAsync(
+                        decrypted |= await this.ProcessCapturedObjectAsync(
                             objectBuffer,
                             decryptedObjectBuffer,
                             tempOutputStream,
@@ -128,6 +182,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             {
                 ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
             }
+
+            return decrypted;
         }
 
         private static void WriteSegment(
@@ -165,7 +221,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             destination.Position = 0;
         }
 
-        private async Task ProcessCapturedObjectAsync(
+        private async Task<bool> ProcessCapturedObjectAsync(
             RentArrayBufferWriter objectBuffer,
             RentArrayBufferWriter decryptedObjectBuffer,
             Stream outputStream,
@@ -179,8 +235,23 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             if (encryptionProperties == null)
             {
                 WriteBufferedObject(objectBytes, length, objectBuffer, outputStream);
-                return;
+                return false;
             }
+
+            if (IsLegacyEncryptionAlgorithm(encryptionProperties.EncryptionAlgorithm))
+            {
+                await DecryptLegacyEncryptedObjectAsync(
+                    objectBytes,
+                    length,
+                    objectBuffer,
+                    outputStream,
+                    encryptor,
+                    diagnosticsContext,
+                    cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+
+            ValidateMdeEncryptionAlgorithm(encryptionProperties.EncryptionAlgorithm);
 
             await this.DecryptEncryptedObjectAsync(
                 objectBytes,
@@ -192,6 +263,32 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 encryptionProperties,
                 diagnosticsContext,
                 cancellationToken).ConfigureAwait(false);
+
+            return true;
+        }
+
+        private static async Task DecryptLegacyEncryptedObjectAsync(
+            byte[] objectBytes,
+            int length,
+            RentArrayBufferWriter objectBuffer,
+            Stream outputStream,
+            Encryptor encryptor,
+            CosmosDiagnosticsContext diagnosticsContext,
+            CancellationToken cancellationToken)
+        {
+            using MemoryStream objectInput = new (objectBytes, 0, length, writable: false);
+            (Stream decryptedObject, _) = await EncryptionProcessor.DecryptAsync(
+                objectInput,
+                encryptor,
+                diagnosticsContext,
+                cancellationToken).ConfigureAwait(false);
+
+            using (decryptedObject)
+            {
+                await decryptedObject.CopyToAsync(outputStream, cancellationToken).ConfigureAwait(false);
+            }
+
+            objectBuffer.Clear();
         }
 
         private async Task DecryptEncryptedObjectAsync(
@@ -374,6 +471,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 throw new NotSupportedException($"Unknown encryption format version: {properties.EncryptionFormatVersion}. Please upgrade your SDK to the latest version.");
             }
 
+            ValidateMdeEncryptionAlgorithm(properties.EncryptionAlgorithm);
+
             int encryptedPathCount = properties.EncryptedPaths is ICollection<string> ec ? ec.Count : properties.EncryptedPaths.Count();
             using ArrayPoolManager arrayPoolManager = new (initialRentCapacity: (encryptedPathCount * 2) + 4);
 
@@ -471,6 +570,29 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             writer.Flush();
 
             return EncryptionProcessor.CreateDecryptionContext(pathsDecrypted, properties.DataEncryptionKeyId);
+        }
+
+        private static bool IsLegacyEncryptionAlgorithm(string encryptionAlgorithm)
+        {
+#pragma warning disable CS0618
+            return string.Equals(
+                encryptionAlgorithm,
+                CosmosEncryptionAlgorithm.AEAes256CbcHmacSha256Randomized,
+                StringComparison.Ordinal);
+#pragma warning restore CS0618
+        }
+
+        private static void ValidateMdeEncryptionAlgorithm(string encryptionAlgorithm)
+        {
+            if (!string.Equals(
+                encryptionAlgorithm,
+                CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized,
+                StringComparison.Ordinal))
+            {
+                throw new NotSupportedException(
+                    $"JsonProcessor.Stream is not supported for encryption algorithm '{encryptionAlgorithm}'. " +
+                    $"Only '{CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized}' is supported with the Stream processor.");
+            }
         }
 
         internal static byte[] HandleReadBuffer(
