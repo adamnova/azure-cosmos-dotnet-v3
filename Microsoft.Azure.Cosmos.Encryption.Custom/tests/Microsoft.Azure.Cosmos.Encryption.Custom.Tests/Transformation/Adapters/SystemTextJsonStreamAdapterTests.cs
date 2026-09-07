@@ -104,26 +104,67 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation.Adapters
         [DataRow("42")]
         [DataRow("false")]
         [DataRow("[1,2,3]")]
-        public async Task DecryptAsync_WhenLastEiIsNonObject_MatchesNewtonsoftPassThrough(string lastEi)
+        public async Task DecryptAsync_WhenLastEiIsMalformedNonNull_BothProcessorsReject(
+            string lastEi)
         {
             const string validEi = "{\"_ef\":3,\"_ea\":\"AEAD_AES_256_CBC_HMAC_SHA256_RANDOMIZED\",\"_en\":\"dek-id\",\"_ep\":[\"/Sensitive\"]}";
             string json = "{\"_ei\":" + validEi + ",\"id\":\"1\",\"_ei\":" + lastEi + "}";
-            using MemoryStream streamInput = new (Encoding.UTF8.GetBytes(json));
-            using MemoryStream newtonsoftInput = new (Encoding.UTF8.GetBytes(json));
+            byte[] inputBytes = Encoding.UTF8.GetBytes(json);
+            using MemoryStream streamInput = new (inputBytes);
+            using MemoryStream newtonsoftInput = new (inputBytes);
             CosmosDiagnosticsContext diagnostics = new ();
+            Mock<Encryptor> noCryptoEncryptor = new (MockBehavior.Strict);
 
             SystemTextJsonStreamAdapter streamAdapter = new (new StreamProcessor());
             NewtonsoftAdapter newtonsoftAdapter = new (new MdeJObjectEncryptionProcessor());
 
+            System.Text.Json.JsonException streamException =
+                await Assert.ThrowsExceptionAsync<System.Text.Json.JsonException>(
+                    async () => await streamAdapter.DecryptAsync(
+                        streamInput,
+                        noCryptoEncryptor.Object,
+                        diagnostics,
+                        CancellationToken.None));
+            Newtonsoft.Json.JsonSerializationException newtonsoftException =
+                await Assert.ThrowsExceptionAsync<Newtonsoft.Json.JsonSerializationException>(
+                    async () => await newtonsoftAdapter.DecryptAsync(
+                        newtonsoftInput,
+                        noCryptoEncryptor.Object,
+                        diagnostics,
+                        CancellationToken.None));
+
+            StringAssert.Contains(streamException.Message, Constants.EncryptedInfo);
+            StringAssert.Contains(streamException.Message, "object or null");
+            StringAssert.Contains(newtonsoftException.Message, Constants.EncryptedInfo);
+            StringAssert.Contains(newtonsoftException.Message, "object or null");
+            Assert.IsTrue(streamInput.CanRead);
+            Assert.IsTrue(newtonsoftInput.CanRead);
+            CollectionAssert.AreEqual(inputBytes, streamInput.ToArray());
+            CollectionAssert.AreEqual(inputBytes, newtonsoftInput.ToArray());
+            noCryptoEncryptor.VerifyNoOtherCalls();
+        }
+
+        [TestMethod]
+        public async Task DecryptAsync_WhenLastEiIsNull_BothProcessorsReturnPlaintext()
+        {
+            const string validEi = "{\"_ef\":3,\"_ea\":\"AEAD_AES_256_CBC_HMAC_SHA256_RANDOMIZED\",\"_en\":\"dek-id\",\"_ep\":[\"/Sensitive\"]}";
+            string json = "{\"_ei\":" + validEi + ",\"id\":\"1\",\"_ei\":null}";
+            byte[] inputBytes = Encoding.UTF8.GetBytes(json);
+            using MemoryStream streamInput = new (inputBytes);
+            using MemoryStream newtonsoftInput = new (inputBytes);
+            Mock<Encryptor> noCryptoEncryptor = new (MockBehavior.Strict);
+
+            SystemTextJsonStreamAdapter streamAdapter = new (new StreamProcessor());
+            NewtonsoftAdapter newtonsoftAdapter = new (new MdeJObjectEncryptionProcessor());
             (Stream streamResult, DecryptionContext streamContext) = await streamAdapter.DecryptAsync(
                 streamInput,
-                mockEncryptor.Object,
-                diagnostics,
+                noCryptoEncryptor.Object,
+                new CosmosDiagnosticsContext(),
                 CancellationToken.None);
             (Stream newtonsoftResult, DecryptionContext newtonsoftContext) = await newtonsoftAdapter.DecryptAsync(
                 newtonsoftInput,
-                mockEncryptor.Object,
-                diagnostics,
+                noCryptoEncryptor.Object,
+                new CosmosDiagnosticsContext(),
                 CancellationToken.None);
 
             Assert.AreSame(streamInput, streamResult);
@@ -132,12 +173,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation.Adapters
             Assert.IsNull(newtonsoftContext);
             Assert.AreEqual(0, streamResult.Position);
             Assert.AreEqual(0, newtonsoftResult.Position);
-
-            using JsonDocument streamDocument = JsonDocument.Parse(streamResult);
-            using JsonDocument newtonsoftDocument = JsonDocument.Parse(newtonsoftResult);
-            Assert.AreEqual(
-                newtonsoftDocument.RootElement.GetRawText(),
-                streamDocument.RootElement.GetRawText());
+            CollectionAssert.AreEqual(inputBytes, streamInput.ToArray());
+            CollectionAssert.AreEqual(inputBytes, newtonsoftInput.ToArray());
+            noCryptoEncryptor.VerifyNoOtherCalls();
         }
 
         [TestMethod]
