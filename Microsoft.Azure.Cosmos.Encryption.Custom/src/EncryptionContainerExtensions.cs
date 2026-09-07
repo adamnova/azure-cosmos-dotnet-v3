@@ -37,16 +37,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// <exception cref="ArgumentException">Thrown if <paramref name="container"/> is not an <see cref="EncryptionContainer"/>.</exception>
         /// <remarks>
         /// <para>
-        /// Streaming JSON processing uses pooled <c>ArrayPool&lt;byte&gt;</c> buffers to reduce allocations on the
-        /// decrypt path. When the result type is <see cref="DecryptableItem"/>, individual items are decrypted
-        /// lazily inside <see cref="DecryptableItem.GetItemAsync{T}"/> and hold a rented buffer until the item is
-        /// disposed.
+        /// Newtonsoft JSON processing remains the default. Streaming JSON processing is an opt-in implementation;
+        /// it does not guarantee a performance improvement or zero-copy processing.
         /// </para>
         /// <para>
-        /// <strong>Per-call opt-in.</strong> This method sets the streaming processor as the container-wide default.
-        /// To opt in (or out) on an individual feed call instead, set the encryption JSON-processor override on that
-        /// call's <see cref="RequestOptions.Properties"/> bag using the key <c>"encryption-json-processor"</c> with the
-        /// string value <c>"Stream"</c> (to use streaming) or <c>"Newtonsoft"</c> (to force the default Newtonsoft path):
+        /// This method selects streaming for supported operations that consult the container default. It does not
+        /// change every API path: typed encrypted Create, Replace, and Upsert operations continue to start with
+        /// Newtonsoft unless that call supplies an override; <c>ReadItemAsync&lt;DecryptableItem&gt;</c> and typed
+        /// change-feed processor callbacks continue to use their existing JObject-based lazy/materialized paths.
+        /// </para>
+        /// <para>
+        /// To select a processor on a supported individual call, set the override on that call's
+        /// <see cref="RequestOptions.Properties"/> bag using the key <c>"encryption-json-processor"</c> and the string
+        /// value <c>"Stream"</c> or <c>"Newtonsoft"</c>:
         /// <code language="c#">
         /// <![CDATA[
         /// QueryRequestOptions requestOptions = new QueryRequestOptions
@@ -58,7 +61,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
         /// The per-call override takes precedence over the container default. LINQ entry points capture the override
         /// supplied to <see cref="Container.GetItemLinqQueryable{T}(bool, string, QueryRequestOptions, CosmosLinqSerializerOptions)"/>
         /// and honor it when <see cref="ToEncryptionFeedIterator{T}"/> or <see cref="ToEncryptionStreamIterator{T}"/>
-        /// creates the iterator.
+        /// creates the iterator. Streaming writes support only
+        /// <see cref="CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized"/>; reads can also consume valid
+        /// historical legacy-encrypted documents.
         /// </para>
         /// <para>
         /// <strong>Disposal contract for <c>FeedResponse&lt;DecryptableItem&gt;</c>.</strong> The <c>FeedResponse&lt;T&gt;</c>

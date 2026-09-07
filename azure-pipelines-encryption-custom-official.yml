@@ -23,6 +23,7 @@ stages:
     - template:  templates/encryption-custom-nuget-pack.yml
       parameters:
         BuildConfiguration: Release
+        Arguments: /p:IsPreview=true
         VmImage: '${{ variables.VmImage }}'
         ReleasePackage: true
         OutputPath: '$(Build.ArtifactStagingDirectory)/bin/AnyCPU/$(BuildConfiguration)/Microsoft.Azure.Cosmos.Encryption.Custom'

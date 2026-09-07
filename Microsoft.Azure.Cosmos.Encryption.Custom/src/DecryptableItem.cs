@@ -18,7 +18,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
     /// The following example is for query processing. The feed response is cast to
     /// <see cref="IAsyncDisposable"/> and disposed in a <c>finally</c> block so that any
     /// items the caller skipped or did not enumerate release their pooled buffers (relevant
-    /// when <c>JsonProcessor.Stream</c> is selected on .NET 8+).
+    /// when the public <c>"encryption-json-processor"</c> request property is set to
+    /// <c>"Stream"</c> on .NET 8+).
     /// <code language="c#">
     /// <![CDATA[
     /// public class ToDoActivity{
