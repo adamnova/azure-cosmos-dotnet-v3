@@ -12,70 +12,69 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
     public class SecurityUtilityTests
     {
         [TestMethod]
-        public void CompareBytes_EqualBuffers_ReturnsTrue()
+        public void CompareBytesEqualRequestedRangeReturnsTrue()
         {
-            byte[] a = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
-            byte[] b = (byte[])a.Clone();
+            byte[] expected = new byte[] { 10, 20, 30, 40 };
+            byte[] actual = new byte[] { 99, 10, 20, 30, 40, 98 };
 
-            Assert.IsTrue(SecurityUtility.CompareBytes(a, b, 0, a.Length));
+            Assert.IsTrue(SecurityUtility.CompareBytes(expected, actual, 1, expected.Length));
         }
 
         [TestMethod]
-        public void CompareBytes_SingleByteDifference_AtEveryPosition_ReturnsFalse()
+        public void CompareBytesDifferenceAtEveryRequestedPositionReturnsFalse()
         {
-            // A constant-time comparison must still reject a mismatch at ANY position — including the
-            // very last byte. An early-exit implementation is trivially correct here; this test guards
-            // against a future "optimization" that stops accumulating before the end.
-            byte[] a = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+            byte[] expected = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
 
-            for (int pos = 0; pos < a.Length; pos++)
+            for (int index = 0; index < expected.Length; index++)
             {
-                byte[] b = (byte[])a.Clone();
-                b[pos] ^= 0xFF;
+                byte[] actual = (byte[])expected.Clone();
+                actual[index] ^= 0xFF;
 
                 Assert.IsFalse(
-                    SecurityUtility.CompareBytes(a, b, 0, a.Length),
-                    $"A difference at position {pos} must be rejected.");
+                    SecurityUtility.CompareBytes(expected, actual, 0, expected.Length),
+                    $"A difference at position {index} must be rejected.");
             }
         }
 
         [TestMethod]
-        public void CompareBytes_Buffer1ShorterThanLength_ReturnsFalse_EvenWhenPrefixMatches()
+        public void CompareBytesShortFirstBufferRejectsMatchingPrefix()
         {
-            // Footgun closure: requesting more bytes than buffer1 contains must fail, even though the
-            // common prefix is equal. Previously the loop clamped to the shorter length and could
-            // report a prefix match as a full match.
-            byte[] a = new byte[] { 1, 2, 3 };
-            byte[] b = new byte[] { 1, 2, 3, 4, 5 };
+            byte[] expected = new byte[] { 1, 2, 3 };
+            byte[] actual = new byte[] { 1, 2, 3, 4 };
 
-            Assert.IsFalse(SecurityUtility.CompareBytes(a, b, 0, b.Length));
+            Assert.IsFalse(SecurityUtility.CompareBytes(expected, actual, 0, actual.Length));
         }
 
         [TestMethod]
-        public void CompareBytes_Buffer2RangeTooShort_ReturnsFalse()
+        public void CompareBytesIgnoresBytesOutsideRequestedRange()
         {
-            byte[] a = new byte[] { 1, 2, 3, 4 };
-            byte[] b = new byte[] { 0, 1, 2 };
+            byte[] expected = new byte[] { 1, 2, 3, 4, 5 };
+            byte[] actual = new byte[] { 99, 1, 2, 3, 4, 98 };
 
-            // buffer2 only has 2 bytes available from index 1, but 4 were requested.
-            Assert.IsFalse(SecurityUtility.CompareBytes(a, b, 1, 4));
+            Assert.IsTrue(SecurityUtility.CompareBytes(expected, actual, 1, 4));
+            Assert.IsFalse(SecurityUtility.CompareBytes(expected, actual, 0, 4));
         }
 
         [TestMethod]
-        public void CompareBytes_WithOffset_ComparesCorrectSlice()
+        public void CompareBytesInsufficientSecondRangeReturnsFalse()
         {
-            byte[] a = new byte[] { 10, 20, 30, 40 };
-            byte[] b = new byte[] { 99, 10, 20, 30, 40, 99 };
+            byte[] expected = new byte[] { 1, 2, 3, 4 };
+            byte[] actual = new byte[] { 99, 1, 2, 3 };
 
-            Assert.IsTrue(SecurityUtility.CompareBytes(a, b, 1, 4));
-            Assert.IsFalse(SecurityUtility.CompareBytes(a, b, 0, 4));
+            Assert.IsFalse(SecurityUtility.CompareBytes(expected, actual, 1, expected.Length));
         }
 
         [TestMethod]
-        public void CompareBytes_NullBuffer_ReturnsFalse()
+        public void CompareBytesNullBufferReturnsFalse()
         {
-            Assert.IsFalse(SecurityUtility.CompareBytes(null, new byte[4], 0, 4));
-            Assert.IsFalse(SecurityUtility.CompareBytes(new byte[4], null, 0, 4));
+            Assert.IsFalse(SecurityUtility.CompareBytes(null, new byte[1], 0, 1));
+            Assert.IsFalse(SecurityUtility.CompareBytes(new byte[1], null, 0, 1));
+        }
+
+        [TestMethod]
+        public void CompareBytesZeroLengthReturnsTrue()
+        {
+            Assert.IsTrue(SecurityUtility.CompareBytes(new byte[1], new byte[1], 0, 0));
         }
     }
 }
