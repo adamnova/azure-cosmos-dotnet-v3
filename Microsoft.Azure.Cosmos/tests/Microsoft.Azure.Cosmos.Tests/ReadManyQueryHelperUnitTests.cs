@@ -471,6 +471,32 @@ namespace Microsoft.Azure.Cosmos.Tests
         }
 
         [TestMethod]
+        public void QueryResponseContent_UsesReadOnlySeekableSdkTransportContract()
+        {
+            CosmosQueryResponseMessageHeaders headers = new CosmosQueryResponseMessageHeaders(
+                continauationToken: null,
+                disallowContinuationTokenMessage: null,
+                resourceType: ResourceType.Document,
+                containerRid: ExpectedContainerRid);
+            QueryResponse queryResponse = QueryResponse.CreateSuccess(
+                result: new[] { CosmosElement.Parse(SampleDocumentJson) },
+                count: 1,
+                responseHeaders: headers,
+                serializationOptions: null,
+                trace: NoOpTrace.Singleton);
+
+            using (queryResponse)
+            {
+                Stream content = queryResponse.Content;
+
+                Assert.IsTrue(content.CanRead, "SDK query response content must be readable.");
+                Assert.IsTrue(content.CanSeek, "SDK query response content must be seekable.");
+                Assert.IsFalse(content.CanWrite, "CosmosElementSerializer.ToStream returns a read-only MemoryStream.");
+                Assert.AreEqual(0L, content.Position, "SDK query response content must start at the complete response origin.");
+            }
+        }
+
+        [TestMethod]
         public void BuildSyntheticQueryResponseHeaders_NonNullContainerRid_IsPreservedExactly()
         {
             ResponseMessage pointReadResponse = new ResponseMessage(System.Net.HttpStatusCode.OK);

@@ -123,6 +123,59 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 preserveRawTokens: RequiresRawTokenPreservation(processorName));
         }
 
+#if NET8_0_OR_GREATER
+        [DataTestMethod]
+        [DynamicData(nameof(GetResponseTransportContracts), DynamicDataSourceType.Method)]
+        public async Task StreamProcessor_PublicFeedBoundaries_HonorResponseTransportContract(
+            string operation,
+            string streamContract)
+        {
+            CompatibilityFixture[] fixtures = CreateFixtures();
+            ResponseTransport transport = CreateResponseTransport(
+                CreateFeedJson(fixtures),
+                streamContract);
+            ContainerHarness harness = CreateHarness(
+                fixtures,
+                responseStreamFactory: _ => transport.Stream);
+            ResponseMessage response = null;
+
+            try
+            {
+                response = await ExecuteFeedOperationAsync(harness.Container, fixtures, operation);
+                Stream output = response.Content;
+
+                AssertMatrix(ReadFeedDocuments(output), fixtures, preserveRawTokens: true);
+
+                bool outputIsOwned = !ReferenceEquals(transport.Stream, output);
+                bool inputWasNotOverwritten = transport.OriginalPayload.SequenceEqual(transport.SnapshotPayload());
+                bool inputRemainedAliveUntilWrapperDisposal = !transport.IsDisposed;
+
+                response.Dispose();
+                response = null;
+
+                bool inputDisposedWithWrapper = transport.IsDisposed;
+                bool outputDisposedWithWrapper = IsDisposed(output);
+
+                Assert.IsTrue(
+                    outputIsOwned &&
+                    inputWasNotOverwritten &&
+                    inputRemainedAliveUntilWrapperDisposal &&
+                    inputDisposedWithWrapper &&
+                    outputDisposedWithWrapper,
+                    $"{operation}/{streamContract}: expected owned atomic output, unchanged borrowed input, " +
+                    "and wrapper-owned disposal. " +
+                    $"owned={outputIsOwned}, unchanged={inputWasNotOverwritten}, " +
+                    $"aliveBeforeDispose={inputRemainedAliveUntilWrapperDisposal}, " +
+                    $"inputDisposed={inputDisposedWithWrapper}, outputDisposed={outputDisposedWithWrapper}.");
+            }
+            finally
+            {
+                response?.Dispose();
+                transport.Stream.Dispose();
+            }
+        }
+#endif
+
         [TestMethod]
         public void PinnedFixtureBytes_MatchRecordedProvenanceHashes()
         {
@@ -466,15 +519,38 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
 #endif
         }
 
+#if NET8_0_OR_GREATER
+        public static IEnumerable<object[]> GetResponseTransportContracts()
+        {
+            string[] operations = { "Query", "ReadMany" };
+            string[] streamContracts =
+            {
+                "SdkReadOnlySeekable",
+                "WritableSeekableControl",
+                "AsyncOnlyNonSeekable",
+            };
+
+            foreach (string operation in operations)
+            {
+                foreach (string streamContract in streamContracts)
+                {
+                    yield return new object[] { operation, streamContract };
+                }
+            }
+        }
+#endif
+
         private static ContainerHarness CreateHarness(
             IReadOnlyCollection<CompatibilityFixture> fixtures,
             Encryptor encryptor = null,
-            CosmosSerializer serializer = null)
+            CosmosSerializer serializer = null,
+            Func<string, Stream> responseStreamFactory = null)
         {
             Mock<Container> inner = new ();
             Mock<CosmosResponseFactory> responseFactory = new ();
             serializer ??= new FixtureCosmosSerializer();
             encryptor ??= new FixedKeyEncryptor();
+            responseStreamFactory ??= CreateStream;
 
             Mock<CosmosClient> client = new ();
             client.SetupGet(value => value.ResponseFactory).Returns(responseFactory.Object);
@@ -494,27 +570,58 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                     It.IsAny<QueryDefinition>(),
                     It.IsAny<string>(),
                     It.IsAny<QueryRequestOptions>()))
-                .Returns(() => CreateInnerFeedIterator(fixtures));
+                .Returns(() => CreateInnerFeedIterator(fixtures, responseStreamFactory));
             inner
                 .Setup(container => container.ReadManyItemsStreamAsync(
                     It.IsAny<IReadOnlyList<(string id, PartitionKey partitionKey)>>(),
                     It.IsAny<ReadManyRequestOptions>(),
                     It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => CreateOkResponse(CreateFeedJson(fixtures)));
+                .ReturnsAsync(() => CreateOkResponse(CreateFeedJson(fixtures), responseStreamFactory));
 
             return new ContainerHarness(
                 new EncryptionContainer(inner.Object, encryptor),
                 inner);
         }
 
-        private static FeedIterator CreateInnerFeedIterator(IReadOnlyCollection<CompatibilityFixture> fixtures)
+        private static FeedIterator CreateInnerFeedIterator(
+            IReadOnlyCollection<CompatibilityFixture> fixtures,
+            Func<string, Stream> responseStreamFactory)
         {
             Mock<FeedIterator> iterator = new ();
             iterator
                 .Setup(feed => feed.ReadNextAsync(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => CreateOkResponse(CreateFeedJson(fixtures)));
+                .ReturnsAsync(() => CreateOkResponse(CreateFeedJson(fixtures), responseStreamFactory));
             return iterator.Object;
         }
+
+#if NET8_0_OR_GREATER
+        private static async Task<ResponseMessage> ExecuteFeedOperationAsync(
+            EncryptionContainer container,
+            IReadOnlyCollection<CompatibilityFixture> fixtures,
+            string operation)
+        {
+            if (string.Equals(operation, "Query", StringComparison.Ordinal))
+            {
+                return await container
+                    .GetItemQueryStreamIterator(
+                        new QueryDefinition("SELECT * FROM c ORDER BY c.id"),
+                        requestOptions: CreateQueryOptions(JsonProcessor.Stream.ToString()))
+                    .ReadNextAsync();
+            }
+
+            if (string.Equals(operation, "ReadMany", StringComparison.Ordinal))
+            {
+                IReadOnlyList<(string id, PartitionKey partitionKey)> items = fixtures
+                    .Select(fixture => (fixture.Id, new PartitionKey(PartitionKeyValue)))
+                    .ToArray();
+                return await container.ReadManyItemsStreamAsync(
+                    items,
+                    CreateReadManyOptions(JsonProcessor.Stream.ToString()));
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown feed operation.");
+        }
+#endif
 
         private static FeedResponse<FixtureDocument> CreateFeedResponse(IReadOnlyList<FixtureDocument> documents)
         {
@@ -640,13 +747,51 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             return new MemoryStream(Encoding.UTF8.GetBytes(content));
         }
 
-        private static ResponseMessage CreateOkResponse(string content)
+        private static ResponseMessage CreateOkResponse(
+            string content,
+            Func<string, Stream> responseStreamFactory = null)
         {
             return new ResponseMessage(HttpStatusCode.OK)
             {
-                Content = CreateStream(content),
+                Content = (responseStreamFactory ?? CreateStream)(content),
             };
         }
+
+#if NET8_0_OR_GREATER
+        private static ResponseTransport CreateResponseTransport(
+            string content,
+            string streamContract)
+        {
+            byte[] payload = Encoding.UTF8.GetBytes(content);
+            switch (streamContract)
+            {
+                case "SdkReadOnlySeekable":
+                    return ResponseTransport.CreateSeekable(payload, writable: false);
+                case "WritableSeekableControl":
+                    return ResponseTransport.CreateSeekable(payload, writable: true);
+                case "AsyncOnlyNonSeekable":
+                    return ResponseTransport.CreateAsyncOnlyNonSeekable(payload);
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(streamContract),
+                        streamContract,
+                        "Unknown response stream contract.");
+            }
+        }
+
+        private static bool IsDisposed(Stream stream)
+        {
+            try
+            {
+                stream.ReadByte();
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
+            }
+        }
+#endif
 
         private static QueryRequestOptions CreateQueryOptions(string processorName)
         {
@@ -940,6 +1085,178 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 return CreateStream(raw);
             }
         }
+
+#if NET8_0_OR_GREATER
+        private sealed class ResponseTransport
+        {
+            private readonly Func<byte[]> snapshotPayload;
+            private readonly Func<bool> isDisposed;
+
+            private ResponseTransport(
+                Stream stream,
+                byte[] originalPayload,
+                Func<byte[]> snapshotPayload,
+                Func<bool> isDisposed)
+            {
+                this.Stream = stream;
+                this.OriginalPayload = originalPayload;
+                this.snapshotPayload = snapshotPayload;
+                this.isDisposed = isDisposed;
+            }
+
+            public Stream Stream { get; }
+
+            public byte[] OriginalPayload { get; }
+
+            public bool IsDisposed => this.isDisposed();
+
+            public byte[] SnapshotPayload() => this.snapshotPayload();
+
+            public static ResponseTransport CreateSeekable(byte[] payload, bool writable)
+            {
+                byte[] buffer = payload.ToArray();
+                TrackingMemoryStream stream = new (buffer, writable)
+                {
+                    Position = buffer.Length,
+                };
+                return new ResponseTransport(
+                    stream,
+                    payload.ToArray(),
+                    stream.ToArray,
+                    () => stream.IsDisposed);
+            }
+
+            public static ResponseTransport CreateAsyncOnlyNonSeekable(byte[] payload)
+            {
+                byte[] prefix = Encoding.UTF8.GetBytes("already-consumed:");
+                byte[] buffer = prefix.Concat(payload).ToArray();
+                AsyncOnlyReadOnlyStream stream = new (buffer, prefix.Length);
+                return new ResponseTransport(
+                    stream,
+                    payload.ToArray(),
+                    stream.SnapshotUnreadOrigin,
+                    () => stream.IsDisposed);
+            }
+        }
+
+        private sealed class TrackingMemoryStream : MemoryStream
+        {
+            public TrackingMemoryStream(byte[] buffer, bool writable)
+                : base(
+                    buffer,
+                    index: 0,
+                    count: buffer.Length,
+                    writable: writable,
+                    publiclyVisible: true)
+            {
+            }
+
+            public bool IsDisposed { get; private set; }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    this.IsDisposed = true;
+                }
+
+                base.Dispose(disposing);
+            }
+        }
+
+        private sealed class AsyncOnlyReadOnlyStream : Stream
+        {
+            private readonly byte[] buffer;
+            private readonly int origin;
+            private int position;
+
+            public AsyncOnlyReadOnlyStream(byte[] buffer, int origin)
+            {
+                this.buffer = buffer;
+                this.origin = origin;
+                this.position = origin;
+            }
+
+            public bool IsDisposed { get; private set; }
+
+            public override bool CanRead => !this.IsDisposed;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public byte[] SnapshotUnreadOrigin()
+            {
+                return this.buffer.AsSpan(this.origin).ToArray();
+            }
+
+            public override void Flush()
+            {
+                throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                ObjectDisposedException.ThrowIf(this.IsDisposed, this);
+                throw new NotSupportedException("Only asynchronous reads are supported.");
+            }
+
+            public override Task<int> ReadAsync(
+                byte[] buffer,
+                int offset,
+                int count,
+                CancellationToken cancellationToken)
+            {
+                return this.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+            }
+
+            public override ValueTask<int> ReadAsync(
+                Memory<byte> buffer,
+                CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ObjectDisposedException.ThrowIf(this.IsDisposed, this);
+
+                int count = Math.Min(buffer.Length, this.buffer.Length - this.position);
+                this.buffer.AsMemory(this.position, count).CopyTo(buffer);
+                this.position += count;
+                return ValueTask.FromResult(count);
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void SetLength(long value)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                throw new NotSupportedException();
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    this.IsDisposed = true;
+                }
+
+                base.Dispose(disposing);
+            }
+        }
+#endif
 
         private sealed class FixedKeyEncryptor : Encryptor
         {
