@@ -10,6 +10,7 @@ namespace CompatMatrix
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.Encryption.Custom;
     using Microsoft.Data.Encryption.Cryptography;
+    using CustomDataEncryptionKey = Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey;
 
     internal sealed class MatrixKeyStoreProvider : EncryptionKeyStoreProvider
     {
@@ -49,6 +50,7 @@ namespace CompatMatrix
         }
     }
 
+#pragma warning disable CS0618
     internal sealed class MatrixKeyWrapProvider : EncryptionKeyWrapProvider
     {
         public override Task<EncryptionKeyUnwrapResult> UnwrapKeyAsync(
@@ -76,42 +78,82 @@ namespace CompatMatrix
             return (value?.Sum(character => (int)character) ?? 0) % 31 + 1;
         }
     }
+#pragma warning restore CS0618
 
     internal sealed class MatrixEncryptor : Encryptor
     {
-        private readonly CosmosEncryptor inner;
+        private readonly DataEncryptionKeyProvider provider;
+        private int decryptCallCount;
 
         public MatrixEncryptor(DataEncryptionKeyProvider provider)
         {
-            this.inner = new CosmosEncryptor(provider);
+            this.provider = provider ?? throw new ArgumentNullException(nameof(provider));
         }
 
-        public override Task<byte[]> DecryptAsync(
+        public override async Task<byte[]> DecryptAsync(
             byte[] cipherText,
             string dataEncryptionKeyId,
             string encryptionAlgorithm,
             CancellationToken cancellationToken = default)
         {
-            return this.inner.DecryptAsync(cipherText, dataEncryptionKeyId, encryptionAlgorithm, cancellationToken);
+            Interlocked.Increment(ref this.decryptCallCount);
+            MatrixDataEncryptionKey key = await this.GetKeyAsync(
+                dataEncryptionKeyId,
+                encryptionAlgorithm,
+                cancellationToken);
+            return key.DecryptData(cipherText);
         }
 
-        public override Task<byte[]> EncryptAsync(
+        public int DecryptCallCount => Volatile.Read(ref this.decryptCallCount);
+
+        public override async Task<byte[]> EncryptAsync(
             byte[] plainText,
             string dataEncryptionKeyId,
             string encryptionAlgorithm,
             CancellationToken cancellationToken = default)
         {
-            return this.inner.EncryptAsync(plainText, dataEncryptionKeyId, encryptionAlgorithm, cancellationToken);
+            MatrixDataEncryptionKey key = await this.GetKeyAsync(
+                dataEncryptionKeyId,
+                encryptionAlgorithm,
+                cancellationToken);
+            return key.EncryptData(plainText);
         }
 
-#if COMPAT_CURRENT
-        public override Task<Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey> GetEncryptionKeyAsync(
+        private async Task<MatrixDataEncryptionKey> GetKeyAsync(
             string dataEncryptionKeyId,
             string encryptionAlgorithm,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken)
         {
-            return this.inner.GetEncryptionKeyAsync(dataEncryptionKeyId, encryptionAlgorithm, cancellationToken);
+            CustomDataEncryptionKey key = await this.provider.FetchDataEncryptionKeyWithoutRawKeyAsync(
+                dataEncryptionKeyId,
+                encryptionAlgorithm,
+                cancellationToken);
+            return new MatrixDataEncryptionKey(
+                key ?? throw new InvalidOperationException("The data encryption key provider returned null."));
         }
-#endif
+    }
+
+    internal sealed class MatrixDataEncryptionKey : CustomDataEncryptionKey
+    {
+        private readonly CustomDataEncryptionKey inner;
+
+        public MatrixDataEncryptionKey(CustomDataEncryptionKey inner)
+        {
+            this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        }
+
+        public override byte[] RawKey => this.inner.RawKey;
+
+        public override string EncryptionAlgorithm => this.inner.EncryptionAlgorithm;
+
+        public override byte[] EncryptData(byte[] plainText)
+        {
+            return this.inner.EncryptData(plainText);
+        }
+
+        public override byte[] DecryptData(byte[] cipherText)
+        {
+            return this.inner.DecryptData(cipherText);
+        }
     }
 }

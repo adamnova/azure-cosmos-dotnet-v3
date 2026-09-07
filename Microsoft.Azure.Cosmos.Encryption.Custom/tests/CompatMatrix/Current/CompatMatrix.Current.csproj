@@ -10,17 +10,21 @@
     <DefineConstants>$(DefineConstants);COMPAT_CURRENT</DefineConstants>
     <SignAssembly>false</SignAssembly>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NuGetAudit>false</NuGetAudit>
+    <CompatMatrixRole>current</CompatMatrixRole>
+    <CompatMatrixPackageVersion Condition="'$(CompatMatrixCurrentPackageVersion)' != ''">$(CompatMatrixCurrentPackageVersion)</CompatMatrixPackageVersion>
+    <CompatMatrixPackageVersion Condition="'$(CompatMatrixPackageVersion)' == ''">UNSPECIFIED</CompatMatrixPackageVersion>
+    <CompatMatrixInputPackagePath Condition="'$(CompatMatrixCurrentPackagePath)' != ''">$([System.IO.Path]::GetFullPath('$(CompatMatrixCurrentPackagePath)'))</CompatMatrixInputPackagePath>
+    <CompatMatrixInputPackagePath Condition="'$(CompatMatrixInputPackagePath)' == ''">UNSPECIFIED</CompatMatrixInputPackagePath>
+    <CompatMatrixPackageSource Condition="'$(CompatMatrixInputPackagePath)' != 'UNSPECIFIED'">$([System.IO.Path]::GetDirectoryName('$(CompatMatrixInputPackagePath)'))</CompatMatrixPackageSource>
+    <CompatMatrixPackageSource Condition="'$(CompatMatrixPackageSource)' == ''">UNSPECIFIED</CompatMatrixPackageSource>
+    <CompatMatrixTransitivePackageSource Condition="'$(CompatMatrixTransitivePackageSource)' == ''">UNSPECIFIED</CompatMatrixTransitivePackageSource>
+    <CompatMatrixExpectedPackageSha256 Condition="'$(CompatMatrixCurrentPackageSha256)' != ''">$(CompatMatrixCurrentPackageSha256)</CompatMatrixExpectedPackageSha256>
+    <CompatMatrixExpectedPackageSha256 Condition="'$(CompatMatrixExpectedPackageSha256)' == ''">UNSPECIFIED</CompatMatrixExpectedPackageSha256>
+    <CompatMatrixSourceCommit Condition="'$(CompatMatrixCurrentSourceCommit)' != ''">$(CompatMatrixCurrentSourceCommit)</CompatMatrixSourceCommit>
+    <CompatMatrixSourceCommit Condition="'$(CompatMatrixSourceCommit)' == ''">UNSPECIFIED</CompatMatrixSourceCommit>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Compile Include="..\Worker\Program.cs" Link="Program.cs" />
-    <Compile Include="..\Worker\KeyProviders.cs" Link="KeyProviders.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\..\src\Microsoft.Azure.Cosmos.Encryption.Custom.csproj" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-  </ItemGroup>
-
+  <Import Project="..\Worker\CompatMatrix.Worker.targets" />
 </Project>

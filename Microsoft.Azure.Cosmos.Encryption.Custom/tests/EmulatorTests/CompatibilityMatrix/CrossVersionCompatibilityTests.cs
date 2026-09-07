@@ -11,7 +11,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
     using System.IO;
     using System.Linq;
     using System.Net;
-    using System.Security.Cryptography;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos;
@@ -29,12 +28,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
 
         [TestMethod]
         [Timeout(15 * 60 * 1000)]
-        public async Task ReleasedPreview07AndCurrentSourceRemainCompatible()
+        public async Task ReleasedPreview07AndAggregatePackageRemainCompatible()
         {
+#if !COMPAT_MATRIX_ENABLED
+            Assert.Inconclusive(
+                "The optional compatibility matrix was not enabled. See tests/CompatMatrix/README.md.");
+            return;
+#else
             using CancellationTokenSource matrixTimeout = new(MatrixTimeout);
             IReadOnlyDictionary<string, string> workers = LoadWorkers();
-            ValidateDependencyClosure(workers["released"], "package", "1.0.0-preview07");
-            ValidateDependencyClosure(workers["current"], "project", expectedVersion: null);
+            CompatibilityMatrixPackageProvenance releasedProvenance =
+                CompatibilityMatrixPackageProvenance.Load(workers["released"], "released");
+            CompatibilityMatrixPackageProvenance currentProvenance =
+                CompatibilityMatrixPackageProvenance.Load(workers["current"], "current");
+            ValidateDependencyClosure(workers["released"], releasedProvenance);
+            ValidateDependencyClosure(workers["current"], currentProvenance);
 
             WorkerInvocation releasedIdentityRun = await RunWorkerAsync(
                 workers["released"],
@@ -49,10 +57,14 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             CompatibilityMatrixIdentityValidator.Validate(
                 releasedIdentity,
                 currentIdentity,
-                GetCurrentSourceAssemblySha256());
+                releasedProvenance,
+                currentProvenance);
+            this.RecordIdentityEvidence(releasedIdentity, releasedProvenance);
+            this.RecordIdentityEvidence(currentIdentity, currentProvenance);
 
             string databaseId = "compat-matrix-" + Guid.NewGuid().ToString("N");
             (string endpoint, string key) = TestCommon.GetAccountInfo();
+            _ = CompatibilityMatrixEndpoint.Validate(endpoint);
             string[] commonArguments =
             {
                 "--endpoint=" + endpoint,
@@ -62,40 +74,81 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             Exception primaryFailure = null;
             try
             {
-                ValidateObservations(
+                WorkerInvocation releasedWrite =
                     await RunAuthenticatedWorkerAsync(
                         workers["released"],
                         matrixTimeout.Token,
                         key,
-                        commonArguments.Prepend("--action=write").ToArray()),
-                    GetWriteScenarios("released"));
+                        commonArguments.Prepend("--action=write").ToArray());
                 ValidateObservations(
+                    releasedWrite,
+                    CompatibilityMatrixScenarios.GetWriteScenarios("released"));
+                ValidateFixtureRecords(releasedWrite);
+                this.RecordFixtureEvidence(releasedWrite);
+
+                WorkerInvocation currentWrite =
                     await RunAuthenticatedWorkerAsync(
                         workers["current"],
                         matrixTimeout.Token,
                         key,
-                        commonArguments.Prepend("--action=write").ToArray()),
-                    GetWriteScenarios("current"));
+                        commonArguments.Prepend("--action=write").ToArray());
+                ValidateObservations(
+                    currentWrite,
+                    CompatibilityMatrixScenarios.GetWriteScenarios("current"));
+                this.RecordFixtureEvidence(currentWrite);
                 ValidateObservations(
                     await RunAuthenticatedWorkerAsync(
                         workers["current"],
                         matrixTimeout.Token,
                         key,
                         commonArguments
-                            .Prepend("--writer=released")
-                            .Prepend("--action=read")
-                            .ToArray()),
-                    GetReadScenarios("released", "current"));
-                ValidateObservations(
-                    await RunAuthenticatedWorkerAsync(
-                        workers["released"],
-                        matrixTimeout.Token,
-                        key,
-                        commonArguments
+                            .Concat(BuildFixtureHashArguments(currentWrite))
                             .Prepend("--writer=current")
                             .Prepend("--action=read")
                             .ToArray()),
-                    GetReadScenarios("current", "released"));
+                    CompatibilityMatrixScenarios.GetReadScenarios("current", "current"));
+                ValidateObservations(
+                    await RunAuthenticatedWorkerAsync(
+                        workers["current"],
+                        matrixTimeout.Token,
+                        key,
+                        commonArguments
+                            .Concat(BuildFixtureHashArguments(releasedWrite))
+                            .Prepend("--writer=released")
+                            .Prepend("--action=read")
+                            .ToArray()),
+                    CompatibilityMatrixScenarios.GetReadScenarios("released", "current"));
+
+                foreach (string rewriteProcessor in new[] { "Newtonsoft", "Stream" })
+                {
+                    WorkerInvocation rewriteInvocation =
+                        await RunAuthenticatedWorkerAsync(
+                            workers["current"],
+                            matrixTimeout.Token,
+                            key,
+                            commonArguments
+                                .Concat(BuildFixtureHashArguments(releasedWrite))
+                                .Prepend("--processor=" + rewriteProcessor)
+                                .Prepend("--writer=released")
+                                .Prepend("--action=rewrite")
+                                .ToArray());
+                    ValidateObservations(
+                        rewriteInvocation,
+                        CompatibilityMatrixScenarios.GetRewriteScenarios(rewriteProcessor));
+                    this.RecordFixtureEvidence(rewriteInvocation);
+                }
+
+                ValidateObservations(
+                    await RunAuthenticatedWorkerAsync(
+                        workers["released"],
+                        matrixTimeout.Token,
+                        key,
+                        commonArguments
+                            .Concat(BuildFixtureHashArguments(currentWrite))
+                            .Prepend("--writer=current")
+                            .Prepend("--action=read")
+                            .ToArray()),
+                    CompatibilityMatrixScenarios.GetReadScenarios("current", "released"));
             }
             catch (Exception exception)
             {
@@ -113,6 +166,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
                     TestContext.WriteLine($"Compatibility cleanup also failed: {cleanupException}");
                 }
             }
+#endif
         }
 
         public TestContext TestContext { get; set; }
@@ -148,8 +202,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
 
         private static void ValidateDependencyClosure(
             string workerPath,
-            string expectedType,
-            string expectedVersion)
+            CompatibilityMatrixPackageProvenance provenance)
         {
             string depsPath = Path.ChangeExtension(workerPath, ".deps.json");
             JObject dependencies = JObject.Parse(File.ReadAllText(depsPath));
@@ -161,20 +214,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
                     StringComparison.Ordinal))
                 ?? throw new InvalidOperationException($"Worker dependency graph does not contain Encryption.Custom: {depsPath}");
             string actualType = library.Value.Value<string>("type");
-            if (!string.Equals(actualType, expectedType, StringComparison.Ordinal))
+            if (!string.Equals(actualType, "package", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"Worker dependency graph loaded Encryption.Custom as {actualType}, expected {expectedType}: {depsPath}");
+                    $"Worker dependency graph loaded Encryption.Custom as {actualType}, expected package: {depsPath}");
             }
 
-            if (expectedVersion != null &&
-                !string.Equals(
+            if (!string.Equals(
                     library.Name,
-                    "Microsoft.Azure.Cosmos.Encryption.Custom/" + expectedVersion,
+                    "Microsoft.Azure.Cosmos.Encryption.Custom/" + provenance.PackageVersion,
                     StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"Worker dependency graph loaded {library.Name}, expected Encryption.Custom/{expectedVersion}.");
+                    $"Worker dependency graph loaded {library.Name}, expected Encryption.Custom/{provenance.PackageVersion}.");
             }
         }
 
@@ -225,14 +277,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             {
                 await process.WaitForExitAsync(timeout.Token);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException exception)
             {
                 await TerminateProcessAsync(process);
-                _ = await standardOutputTask;
-                _ = await standardErrorTask;
+                string timedOutStandardOutput = await standardOutputTask;
+                string timedOutStandardError = await standardErrorTask;
+                string deadline = matrixCancellationToken.IsCancellationRequested
+                    ? "matrix"
+                    : "worker";
 
                 throw new TimeoutException(
-                    $"Compatibility matrix or worker deadline expired: {Path.GetFileName(workerPath)} {string.Join(" ", arguments)}");
+                    $"Compatibility {deadline} deadline expired: {Path.GetFileName(workerPath)} {string.Join(" ", arguments)}" +
+                    FormatProcessOutput(timedOutStandardOutput, timedOutStandardError),
+                    exception);
             }
 
             string standardOutput = await standardOutputTask;
@@ -245,7 +302,8 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             if (!string.IsNullOrWhiteSpace(standardError))
             {
                 throw new InvalidOperationException(
-                    $"Compatibility worker wrote to stderr: {standardError.Trim()}");
+                    "Compatibility worker wrote to stderr." +
+                    FormatProcessOutput(standardOutput, standardError));
             }
 
             CompatibilityMatrixRecord[] completions = records
@@ -255,14 +313,22 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
                 !ReferenceEquals(completions[0], records.LastOrDefault()))
             {
                 throw new InvalidOperationException(
-                    $"Compatibility worker emitted an invalid completion record.{Environment.NewLine}{standardOutput}");
+                    "Compatibility worker emitted an invalid completion record." +
+                    FormatProcessOutput(standardOutput, standardError));
             }
 
             if (process.ExitCode != 0 ||
                 !string.Equals(completions[0].Status, "pass", StringComparison.Ordinal))
             {
+                string failureSummary = string.Join(
+                    Environment.NewLine,
+                    records
+                        .Where(record => string.Equals(record.Status, "fail", StringComparison.Ordinal))
+                        .Select(record => $"{record.Kind}:{record.ScenarioId}:{record.Detail}"));
                 throw new InvalidOperationException(
-                    $"Compatibility worker failed with exit code {process.ExitCode}.{Environment.NewLine}{standardOutput}");
+                    $"Compatibility worker failed with exit code {process.ExitCode}.{Environment.NewLine}" +
+                    failureSummary +
+                    FormatProcessOutput(standardOutput, standardError));
             }
 
             return new WorkerInvocation(workerPath, records);
@@ -297,6 +363,28 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             }
         }
 
+        private static string FormatProcessOutput(
+            string standardOutput,
+            string standardError)
+        {
+            const int maximumCharacters = 4096;
+            string combined =
+                $"{Environment.NewLine}stdout:{Environment.NewLine}{standardOutput?.Trim()}" +
+                $"{Environment.NewLine}stderr:{Environment.NewLine}{standardError?.Trim()}";
+            if (combined.Length <= maximumCharacters)
+            {
+                return combined;
+            }
+
+            const int prefixCharacters = 1024;
+            int suffixCharacters = maximumCharacters - prefixCharacters;
+            return combined.Substring(0, prefixCharacters) +
+                Environment.NewLine +
+                "<middle truncated>" +
+                Environment.NewLine +
+                combined.Substring(combined.Length - suffixCharacters);
+        }
+
         private static void ValidateObservations(
             WorkerInvocation invocation,
             IReadOnlyCollection<string> expectedScenarios)
@@ -305,6 +393,76 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
                 .Where(record => string.Equals(record.Kind, "observation", StringComparison.Ordinal))
                 .ToArray();
             CompatibilityMatrixResultOracle.Validate(expectedScenarios, observations);
+        }
+
+        private static void ValidateFixtureRecords(WorkerInvocation invocation)
+        {
+            CompatibilityMatrixRecord[] fixtures = invocation.Records
+                .Where(record => string.Equals(record.Kind, "fixture", StringComparison.Ordinal))
+                .ToArray();
+            if (fixtures.Length != 2 ||
+                fixtures.Any(record =>
+                    !string.Equals(record.Status, "pass", StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(record.DocumentId) ||
+                    string.IsNullOrWhiteSpace(record.FixtureSha256) ||
+                    string.IsNullOrWhiteSpace(record.PlaintextSha256) ||
+                    string.IsNullOrWhiteSpace(record.RawShape)) ||
+                fixtures.Select(record => record.DocumentId).Distinct(StringComparer.Ordinal).Count() != 2)
+            {
+                throw new InvalidOperationException(
+                    "Released worker did not emit two distinct hash-pinned rewrite fixtures.");
+            }
+        }
+
+        private static IEnumerable<string> BuildFixtureHashArguments(WorkerInvocation invocation)
+        {
+            CompatibilityMatrixRecord[] records = invocation.Records
+                .Where(record =>
+                    (string.Equals(record.Kind, "observation", StringComparison.Ordinal) ||
+                     string.Equals(record.Kind, "fixture", StringComparison.Ordinal)) &&
+                    string.Equals(record.Status, "pass", StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(record.DocumentId) &&
+                    !string.IsNullOrWhiteSpace(record.FixtureSha256))
+                .ToArray();
+            if (records.Select(record => record.DocumentId).Distinct(StringComparer.Ordinal).Count() != records.Length)
+            {
+                throw new InvalidOperationException(
+                    "Compatibility worker emitted duplicate fixture document ids.");
+            }
+
+            return records.Select(
+                record => $"--fixture-sha256-{record.DocumentId}={record.FixtureSha256}");
+        }
+
+        private void RecordIdentityEvidence(
+            CompatibilityMatrixRecord identity,
+            CompatibilityMatrixPackageProvenance provenance)
+        {
+            this.TestContext.WriteLine(
+                $"COMPAT_IDENTITY role={identity.Role};package={provenance.PackageId}/{provenance.PackageVersion};" +
+                $"inputNupkg={provenance.InputNupkgPath ?? provenance.NupkgPath};" +
+                $"source={provenance.ActualSource};sourceCommit={provenance.SourceCommit};" +
+                $"nupkgSha256={provenance.NupkgSha256};assemblyPath={identity.AssemblyPath};" +
+                $"assemblySha256={identity.AssemblySha256};" +
+                $"mvid={identity.AssemblyMvid};assemblyVersion={identity.AssemblyVersion};" +
+                $"productVersion={identity.ProductVersion};informationalVersion={identity.InformationalVersion}");
+        }
+
+        private void RecordFixtureEvidence(WorkerInvocation invocation)
+        {
+            foreach (CompatibilityMatrixRecord record in invocation.Records.Where(record =>
+                string.Equals(record.Status, "pass", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(record.FixtureSha256) &&
+                (string.Equals(record.Kind, "fixture", StringComparison.Ordinal) ||
+                 record.ScenarioId.StartsWith("write:", StringComparison.Ordinal) ||
+                 record.ScenarioId.StartsWith("rewrite:", StringComparison.Ordinal))))
+            {
+                this.TestContext.WriteLine(
+                    $"COMPAT_FIXTURE scenario={record.ScenarioId};document={record.DocumentId};" +
+                    $"inputSha256={record.InputFixtureSha256 ?? "<created>"};" +
+                    $"fixtureSha256={record.FixtureSha256};plaintextSha256={record.PlaintextSha256};" +
+                    $"shape={record.RawShape}");
+            }
         }
 
         private static CompatibilityMatrixRecord GetSingleRecord(WorkerInvocation invocation, string kind)
@@ -321,75 +479,18 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             return records[0];
         }
 
-        private static IReadOnlyCollection<string> GetWriteScenarios(string writer)
-        {
-            List<string> scenarios = new()
-            {
-                $"write:{writer}:MDE:Newtonsoft",
-                $"write:{writer}:AEAD:Newtonsoft",
-            };
-            if (writer == "current")
-            {
-                scenarios.Insert(1, "write:current:MDE:Stream");
-            }
-
-            return scenarios;
-        }
-
-        private static IReadOnlyCollection<string> GetReadScenarios(string writer, string reader)
-        {
-            List<string> scenarios = new();
-            IEnumerable<(string Family, string WriteProcessor, string ReadProcessor)> combinations =
-                writer == "released"
-                    ? new[]
-                    {
-                        ("MDE", "Newtonsoft", "Newtonsoft"),
-                        ("MDE", "Newtonsoft", "Stream"),
-                        ("AEAD", "Newtonsoft", "Newtonsoft"),
-                    }
-                    : new[]
-                    {
-                        ("MDE", "Newtonsoft", "Newtonsoft"),
-                        ("MDE", "Stream", "Newtonsoft"),
-                        ("AEAD", "Newtonsoft", "Newtonsoft"),
-                    };
-            foreach ((string family, string writeProcessor, string readProcessor) in combinations)
-            {
-                foreach (string path in new[] { "point", "query", "feed" })
-                {
-                    scenarios.Add(
-                        $"read:{writer}->{reader}:{family}:{writeProcessor}->{GetRequestedProcessorLabel(readProcessor)}:{path}");
-                }
-            }
-
-            return scenarios;
-        }
-
-        private static string GetRequestedProcessorLabel(string processor)
-        {
-            return processor == "Stream" ? "StreamRequested" : processor;
-        }
-
-        private static string GetCurrentSourceAssemblySha256()
-        {
-            string assemblyPath = typeof(EncryptionContainerExtensions).Assembly.Location;
-            return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assemblyPath)));
-        }
-
         private static async Task DeleteDatabaseAsync(string databaseId, string endpoint, string key)
         {
+            Uri emulatorEndpoint = CompatibilityMatrixEndpoint.Validate(endpoint);
             using CosmosClient client = new(
-                endpoint,
+                emulatorEndpoint.AbsoluteUri,
                 key,
                 new CosmosClientOptions
                 {
                     ConnectionMode = ConnectionMode.Gateway,
                     LimitToEndpoint = true,
                     HttpClientFactory = () => new System.Net.Http.HttpClient(
-                        new System.Net.Http.HttpClientHandler
-                        {
-                            ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
-                        }),
+                        CompatibilityMatrixEndpoint.CreateHttpClientHandler(emulatorEndpoint)),
                 });
             using CancellationTokenSource timeout = new(CleanupTimeout);
             try

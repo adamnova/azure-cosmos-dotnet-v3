@@ -33,7 +33,8 @@
   
    <ItemGroup>
     <Compile Include="..\..\..\Microsoft.Azure.Cosmos\tests\Microsoft.Azure.Cosmos.EmulatorTests\Utils\ConfigurationManager.cs" Link="Utils\ConfigurationManager.cs" />
-  </ItemGroup>
+     <Compile Include="..\CompatMatrix\Worker\CompatibilityPayloadOracle.cs" Link="CompatibilityMatrix\CompatibilityPayloadOracle.cs" />
+   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\Microsoft.Azure.Cosmos\tests\Microsoft.Azure.Cosmos.EmulatorTests\settings.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -48,7 +49,12 @@
     <ProjectReference Include="..\..\src\Microsoft.Azure.Cosmos.Encryption.Custom.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+  <PropertyGroup>
+    <RunEncryptionCustomCompatibilityMatrix Condition="'$(RunEncryptionCustomCompatibilityMatrix)' == ''">false</RunEncryptionCustomCompatibilityMatrix>
+    <DefineConstants Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">$(DefineConstants);COMPAT_MATRIX_ENABLED</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">
     <_CompatMatrixWorkerProject Include="..\CompatMatrix\Released\CompatMatrix.Released.csproj" />
     <_CompatMatrixWorkerProject Include="..\CompatMatrix\Current\CompatMatrix.Current.csproj" />
     <ProjectReference Include="@(_CompatMatrixWorkerProject)"
@@ -73,7 +79,7 @@
 
   <Target Name="WriteCompatMatrixWorkerManifest"
           AfterTargets="Build"
-          Condition="'$(TargetFramework)' == 'net8.0'">
+          Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">
     <MSBuild Projects="@(_CompatMatrixWorkerProject)"
              Targets="GetTargetPath"
              BuildInParallel="true"
