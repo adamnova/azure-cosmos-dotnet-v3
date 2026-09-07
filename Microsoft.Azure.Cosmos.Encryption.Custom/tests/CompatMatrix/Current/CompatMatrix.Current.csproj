@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CompatMatrix.Current</AssemblyName>
+    <RootNamespace>CompatMatrix</RootNamespace>
+    <DefineConstants>$(DefineConstants);COMPAT_CURRENT</DefineConstants>
+    <SignAssembly>false</SignAssembly>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NuGetAudit>false</NuGetAudit>
+    <CompatMatrixRole>current</CompatMatrixRole>
+    <CompatMatrixPackageVersion Condition="'$(CompatMatrixCurrentPackageVersion)' != ''">$(CompatMatrixCurrentPackageVersion)</CompatMatrixPackageVersion>
+    <CompatMatrixPackageVersion Condition="'$(CompatMatrixPackageVersion)' == ''">UNSPECIFIED</CompatMatrixPackageVersion>
+    <CompatMatrixInputPackagePath Condition="'$(CompatMatrixCurrentPackagePath)' != ''">$([System.IO.Path]::GetFullPath('$(CompatMatrixCurrentPackagePath)'))</CompatMatrixInputPackagePath>
+    <CompatMatrixInputPackagePath Condition="'$(CompatMatrixInputPackagePath)' == ''">UNSPECIFIED</CompatMatrixInputPackagePath>
+    <CompatMatrixPackageSource Condition="'$(CompatMatrixInputPackagePath)' != 'UNSPECIFIED'">$([System.IO.Path]::GetDirectoryName('$(CompatMatrixInputPackagePath)'))</CompatMatrixPackageSource>
+    <CompatMatrixPackageSource Condition="'$(CompatMatrixPackageSource)' == ''">UNSPECIFIED</CompatMatrixPackageSource>
+    <CompatMatrixTransitivePackageSource Condition="'$(CompatMatrixTransitivePackageSource)' == ''">UNSPECIFIED</CompatMatrixTransitivePackageSource>
+    <CompatMatrixExpectedPackageSha256 Condition="'$(CompatMatrixCurrentPackageSha256)' != ''">$(CompatMatrixCurrentPackageSha256)</CompatMatrixExpectedPackageSha256>
+    <CompatMatrixExpectedPackageSha256 Condition="'$(CompatMatrixExpectedPackageSha256)' == ''">UNSPECIFIED</CompatMatrixExpectedPackageSha256>
+    <CompatMatrixSourceCommit Condition="'$(CompatMatrixCurrentSourceCommit)' != ''">$(CompatMatrixCurrentSourceCommit)</CompatMatrixSourceCommit>
+    <CompatMatrixSourceCommit Condition="'$(CompatMatrixSourceCommit)' == ''">UNSPECIFIED</CompatMatrixSourceCommit>
+  </PropertyGroup>
+
+  <Import Project="..\Worker\CompatMatrix.Worker.targets" />
+</Project>

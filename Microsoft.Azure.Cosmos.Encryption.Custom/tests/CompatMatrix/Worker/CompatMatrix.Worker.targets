@@ -1,0 +1,71 @@
+<Project>
+  <PropertyGroup>
+    <RestorePackagesPath>$(MSBuildProjectDirectory)\obj\compat-packages\$(CompatMatrixExpectedPackageSha256)</RestorePackagesPath>
+    <RestoreNoCache>true</RestoreNoCache>
+    <RestoreIgnoreFailedSources>false</RestoreIgnoreFailedSources>
+    <RestoreSources>$(CompatMatrixPackageSource);$(CompatMatrixTransitivePackageSource)</RestoreSources>
+    <CompatMatrixInputPackageFileName Condition="'$(CompatMatrixInputPackagePath)' != '' and '$(CompatMatrixInputPackagePath)' != 'UNSPECIFIED'">$([System.IO.Path]::GetFileName($(CompatMatrixInputPackagePath)))</CompatMatrixInputPackageFileName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Worker\Program.cs" Link="Program.cs" />
+    <Compile Include="..\Worker\KeyProviders.cs" Link="KeyProviders.cs" />
+    <Compile Include="..\Worker\CompatibilityPayloadOracle.cs" Link="CompatibilityPayloadOracle.cs" />
+    <PackageReference Include="Microsoft.Azure.Cosmos.Encryption.Custom"
+                      Version="[$(CompatMatrixPackageVersion)]"
+                      GeneratePathProperty="true" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <Target Name="ValidateCompatMatrixPackageConfiguration"
+          BeforeTargets="Restore;Build">
+    <Error Condition="'$(CompatMatrixPackageVersion)' == '' or '$(CompatMatrixPackageVersion)' == 'UNSPECIFIED'"
+           Text="The compatibility worker package version was not specified." />
+    <Error Condition="'$(CompatMatrixPackageSource)' == '' or '$(CompatMatrixPackageSource)' == 'UNSPECIFIED'"
+           Text="The compatibility worker package source was not specified." />
+    <Error Condition="'$(CompatMatrixTransitivePackageSource)' == '' or '$(CompatMatrixTransitivePackageSource)' == 'UNSPECIFIED'"
+           Text="The compatibility worker transitive package source was not specified." />
+    <Error Condition="'$(CompatMatrixExpectedPackageSha256)' == '' or '$(CompatMatrixExpectedPackageSha256)' == 'UNSPECIFIED'"
+           Text="The compatibility worker package SHA-256 was not specified." />
+    <Error Condition="'$(CompatMatrixRole)' == 'current' and ('$(CompatMatrixInputPackagePath)' == '' or '$(CompatMatrixInputPackagePath)' == 'UNSPECIFIED')"
+           Text="The current compatibility worker requires an explicit candidate .nupkg path." />
+    <Error Condition="'$(CompatMatrixRole)' == 'current' and !Exists('$(CompatMatrixInputPackagePath)')"
+           Text="The current compatibility worker candidate archive was not found: $(CompatMatrixInputPackagePath)" />
+    <Error Condition="'$(CompatMatrixRole)' == 'current' and '$(CompatMatrixInputPackageFileName)' != 'Microsoft.Azure.Cosmos.Encryption.Custom.$(CompatMatrixPackageVersion).nupkg'"
+           Text="The current compatibility worker candidate archive name does not match the exact package version." />
+    <Error Condition="'$(CompatMatrixRole)' == 'current' and ('$(CompatMatrixSourceCommit)' == '' or '$(CompatMatrixSourceCommit)' == 'UNSPECIFIED')"
+           Text="The current compatibility worker source commit was not specified." />
+    <GetFileHash Condition="'$(CompatMatrixRole)' == 'current'"
+                 Files="$(CompatMatrixInputPackagePath)"
+                 Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_CompatInputNupkgHash" />
+    </GetFileHash>
+    <Error Condition="'$(CompatMatrixRole)' == 'current' and '%(_CompatInputNupkgHash.FileHash)' != '$(CompatMatrixExpectedPackageSha256)'"
+           Text="The explicit current candidate archive hash does not match the expected SHA-256. Actual=%(_CompatInputNupkgHash.FileHash) Expected=$(CompatMatrixExpectedPackageSha256)" />
+  </Target>
+
+  <Target Name="WriteCompatMatrixPackageProvenance"
+          AfterTargets="Build">
+    <PropertyGroup>
+      <_CompatPackageRoot>$([System.IO.Path]::GetFullPath('$(PkgMicrosoft_Azure_Cosmos_Encryption_Custom)'))</_CompatPackageRoot>
+      <_CompatNupkgPath>$(_CompatPackageRoot)\microsoft.azure.cosmos.encryption.custom.$(CompatMatrixPackageVersion).nupkg</_CompatNupkgPath>
+      <_CompatMetadataPath>$(_CompatPackageRoot)\.nupkg.metadata</_CompatMetadataPath>
+      <_CompatProvenancePath>$(TargetDir)$(AssemblyName).package-provenance.txt</_CompatProvenancePath>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(_CompatNupkgPath)')"
+           Text="Compatibility worker package archive was not found: $(_CompatNupkgPath)" />
+    <Error Condition="!Exists('$(_CompatMetadataPath)')"
+           Text="Compatibility worker package metadata was not found: $(_CompatMetadataPath)" />
+    <GetFileHash Files="$(_CompatNupkgPath)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_CompatNupkgHash" />
+    </GetFileHash>
+    <Error Condition="'%(_CompatNupkgHash.FileHash)' != '$(CompatMatrixExpectedPackageSha256)'"
+           Text="Compatibility worker package hash mismatch. Actual=%(_CompatNupkgHash.FileHash) Expected=$(CompatMatrixExpectedPackageSha256)" />
+    <WriteLinesToFile
+      File="$(_CompatProvenancePath)"
+      Lines="role=$(CompatMatrixRole);package-id=Microsoft.Azure.Cosmos.Encryption.Custom;package-version=$(CompatMatrixPackageVersion);expected-source=$(CompatMatrixPackageSource);input-nupkg-path=$(CompatMatrixInputPackagePath);package-root=$(_CompatPackageRoot);nupkg-path=$(_CompatNupkgPath);nupkg-sha256=%(_CompatNupkgHash.FileHash);source-commit=$(CompatMatrixSourceCommit)"
+      Overwrite="true"
+      Encoding="UTF-8" />
+  </Target>
+</Project>

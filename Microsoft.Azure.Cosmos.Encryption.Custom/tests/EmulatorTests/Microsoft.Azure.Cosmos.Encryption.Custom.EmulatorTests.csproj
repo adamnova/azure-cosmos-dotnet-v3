@@ -33,7 +33,8 @@
   
    <ItemGroup>
     <Compile Include="..\..\..\Microsoft.Azure.Cosmos\tests\Microsoft.Azure.Cosmos.EmulatorTests\Utils\ConfigurationManager.cs" Link="Utils\ConfigurationManager.cs" />
-  </ItemGroup>
+     <Compile Include="..\CompatMatrix\Worker\CompatibilityPayloadOracle.cs" Link="CompatibilityMatrix\CompatibilityPayloadOracle.cs" />
+   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\Microsoft.Azure.Cosmos\tests\Microsoft.Azure.Cosmos.EmulatorTests\settings.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -57,6 +58,19 @@
   <ItemGroup Condition=" '$(SdkProjectRef)' == 'True' ">
     <PackageReference Include="Microsoft.Azure.Cosmos.Direct" Version="[$(DirectVersion)]" PrivateAssets="All" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <RunEncryptionCustomCompatibilityMatrix Condition="'$(RunEncryptionCustomCompatibilityMatrix)' == ''">false</RunEncryptionCustomCompatibilityMatrix>
+    <DefineConstants Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">$(DefineConstants);COMPAT_MATRIX_ENABLED</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">
+    <_CompatMatrixWorkerProject Include="..\CompatMatrix\Released\CompatMatrix.Released.csproj" />
+    <_CompatMatrixWorkerProject Include="..\CompatMatrix\Current\CompatMatrix.Current.csproj" />
+    <ProjectReference Include="@(_CompatMatrixWorkerProject)"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+  </ItemGroup>
 	
   <PropertyGroup>
     <SignAssembly>true</SignAssembly>
@@ -72,4 +86,29 @@
   <PropertyGroup Condition=" '$(SdkProjectRef)' == 'True' ">
     <DefineConstants>$(DefineConstants);SDKPROJECTREF</DefineConstants>
   </PropertyGroup>
+
+  <Target Name="WriteCompatMatrixWorkerManifest"
+          AfterTargets="Build"
+          Condition="'$(TargetFramework)' == 'net8.0' and '$(RunEncryptionCustomCompatibilityMatrix)' == 'true'">
+    <MSBuild Projects="@(_CompatMatrixWorkerProject)"
+             Targets="GetTargetPath"
+             BuildInParallel="true"
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0">
+      <Output TaskParameter="TargetOutputs" ItemName="_CompatMatrixWorkerOutput" />
+    </MSBuild>
+
+    <Error Condition="'@(_CompatMatrixWorkerOutput)' == ''"
+           Text="Compatibility matrix workers were not built." />
+    <WriteLinesToFile
+      File="$(TargetDir)CompatMatrix.Workers.txt"
+      Lines="@(_CompatMatrixWorkerOutput->'%(MSBuildSourceProjectFile)|%(FullPath)')"
+      Overwrite="true"
+      Encoding="UTF-8" />
+  </Target>
+
+  <Target Name="CleanCompatMatrixWorkerManifest"
+          AfterTargets="Clean"
+          Condition="'$(TargetFramework)' == 'net8.0'">
+    <Delete Files="$(TargetDir)CompatMatrix.Workers.txt" />
+  </Target>
 </Project>
