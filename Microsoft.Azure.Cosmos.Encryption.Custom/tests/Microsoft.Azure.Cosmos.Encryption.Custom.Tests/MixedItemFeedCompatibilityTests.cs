@@ -1283,16 +1283,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                     Data.Encryption.Cryptography.EncryptionType.Randomized);
             }
 
-            public override Task<DataEncryptionKey> GetEncryptionKeyAsync(
-                string dataEncryptionKeyId,
-                string encryptionAlgorithm,
-                CancellationToken cancellationToken = default)
-            {
-                Assert.AreEqual(DekId, dataEncryptionKeyId);
-                this.keyAccessAlgorithms.Add(encryptionAlgorithm);
-                return Task.FromResult(this.mdeKey);
-            }
-
             public int GetKeyAccessCount(string encryptionAlgorithm)
             {
                 return this.keyAccessAlgorithms.Count(
@@ -1306,6 +1296,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 CancellationToken cancellationToken = default)
             {
                 Assert.AreEqual(DekId, dataEncryptionKeyId);
+                this.keyAccessAlgorithms.Add(encryptionAlgorithm);
                 return Task.FromResult(this.GetKey(encryptionAlgorithm).EncryptData(plainText));
             }
 
@@ -1316,6 +1307,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 CancellationToken cancellationToken = default)
             {
                 Assert.AreEqual(DekId, dataEncryptionKeyId);
+                this.keyAccessAlgorithms.Add(encryptionAlgorithm);
                 return Task.FromResult(this.GetKey(encryptionAlgorithm).DecryptData(cipherText));
             }
 

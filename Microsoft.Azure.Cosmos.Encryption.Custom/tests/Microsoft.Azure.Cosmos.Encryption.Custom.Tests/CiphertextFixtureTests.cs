@@ -102,11 +102,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 this.dek = dek;
             }
 
-            public override Task<DataEncryptionKey> GetEncryptionKeyAsync(string dataEncryptionKeyId, string encryptionAlgorithm, CancellationToken cancellationToken = default)
-            {
-                throw new NotSupportedException("Direct key access is not supported.");
-            }
-
             public override Task<byte[]> EncryptAsync(byte[] plainText, string dataEncryptionKeyId, string encryptionAlgorithm, CancellationToken cancellationToken = default)
             {
                 return Task.FromResult(this.dek.EncryptData(plainText));

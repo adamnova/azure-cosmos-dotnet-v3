@@ -14,6 +14,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation.Adapters
     using Microsoft.Azure.Cosmos.Encryption.Custom.Transformation;
     using Microsoft.Azure.Cosmos.Encryption.Tests;
     using Microsoft.VisualStudio.TestTools.UnitTesting;
+    using Moq;
 
     [TestClass]
     public class SystemTextJsonSystemTextJsonStreamAdapterTests

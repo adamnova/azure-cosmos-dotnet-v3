@@ -31,7 +31,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             string handlerKind,
             bool callbackThrows)
         {
-            Mock<Encryptor> encryptor = TestEncryptorFactory.CreateMde(DekId, out _);
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = TestEncryptorFactory.CreateMde(DekId, out _);
             string encryptedFeed = await CreateEncryptedFeedAsync(encryptor.Object);
             TrackingReadOnlyStream borrowedInput = CreateTrackingStream(encryptedFeed);
             byte[] originalInput = borrowedInput.ToArray();
@@ -85,7 +85,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             string handlerKind,
             bool callbackThrows)
         {
-            Mock<Encryptor> encryptor = TestEncryptorFactory.CreateMde(DekId, out _);
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = TestEncryptorFactory.CreateMde(DekId, out _);
             TrackingReadOnlyStream borrowedInput = CreateTrackingStream(PlaintextFeed);
             byte[] originalInput = borrowedInput.ToArray();
             ChangeFeedHarness harness = new (encryptor.Object);
@@ -136,7 +136,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             string handlerKind,
             string failureKind)
         {
-            Mock<Encryptor> workingEncryptor = TestEncryptorFactory.CreateMde(DekId, out _);
+            TestEncryptorFactory.MdeConcreteEncryptor workingEncryptor = TestEncryptorFactory.CreateMde(DekId, out _);
             string encryptedFeed = await CreateEncryptedFeedAsync(workingEncryptor.Object);
             Encryptor runtimeEncryptor = workingEncryptor.Object;
             Exception expectedException = null;
@@ -145,14 +145,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             if (failureKind == "Provider")
             {
                 InvalidOperationException providerException = new ("provider failure");
-                Mock<Encryptor> failingEncryptor = new ();
-                failingEncryptor
-                    .Setup(encryptor => encryptor.GetEncryptionKeyAsync(
-                        It.IsAny<string>(),
-                        It.IsAny<string>(),
-                        It.IsAny<CancellationToken>()))
-                    .ThrowsAsync(providerException);
-                runtimeEncryptor = failingEncryptor.Object;
+                runtimeEncryptor = new FailingKeyAccessorEncryptor(providerException);
                 expectedException = providerException;
             }
             else if (failureKind == "UnknownAlgorithm")
@@ -418,6 +411,42 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 }
 
                 throw new ArgumentOutOfRangeException(nameof(handlerKind), handlerKind, "Unknown handler kind.");
+            }
+        }
+
+        private sealed class FailingKeyAccessorEncryptor : Encryptor, IDataEncryptionKeyAccessor
+        {
+            private readonly Exception exception;
+
+            public FailingKeyAccessorEncryptor(Exception exception)
+            {
+                this.exception = exception;
+            }
+
+            public Task<DataEncryptionKey> GetEncryptionKeyAsync(
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken)
+            {
+                return Task.FromException<DataEncryptionKey>(this.exception);
+            }
+
+            public override Task<byte[]> EncryptAsync(
+                byte[] plainText,
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken = default)
+            {
+                throw new AssertFailedException("Encryption must not be called.");
+            }
+
+            public override Task<byte[]> DecryptAsync(
+                byte[] cipherText,
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken = default)
+            {
+                throw new AssertFailedException("Public decryption must not be called.");
             }
         }
 

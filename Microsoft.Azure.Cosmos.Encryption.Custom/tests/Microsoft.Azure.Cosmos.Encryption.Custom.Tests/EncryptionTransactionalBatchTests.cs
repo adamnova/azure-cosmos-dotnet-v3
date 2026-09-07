@@ -321,7 +321,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         public async Task ExecuteAsync_RejectsEveryMutationBeforeSideEffects(string operation)
         {
             DeferredSnapshotTransactionalBatch inner = new ();
-            Mock<Encryptor> encryptor = CreateMdeEncryptor("dekId");
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = CreateMdeEncryptor("dekId");
             Mock<CosmosSerializer> serializer = new ();
             serializer.Setup(instance => instance.ToStream(It.IsAny<TestCommon.TestDoc>()))
                 .Returns<TestCommon.TestDoc>(document => document.ToStream());
@@ -412,25 +412,16 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         public async Task ExecuteAsync_RejectsMutationUntilResponseDecryptionCompletes()
         {
             const string dekId = "dekId";
-            Mock<Encryptor> sourceEncryptor = CreateMdeEncryptor(dekId);
+            TestEncryptorFactory.MdeConcreteEncryptor sourceEncryptor = CreateMdeEncryptor(dekId);
             TrackingStream encryptedStream = await CreateTrackingEncryptedPayloadAsync(sourceEncryptor.Object);
             TaskCompletionSource<bool> decryptEntered = new (
                 TaskCreationOptions.RunContinuationsAsynchronously);
             TaskCompletionSource<bool> allowDecrypt = new (
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            Mock<Encryptor> blockingEncryptor = new ();
-            blockingEncryptor.Setup(instance => instance.GetEncryptionKeyAsync(
-                    dekId,
-                    It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()))
-                .Returns((string id, string algorithm, CancellationToken cancellationToken) =>
-                    WaitForKeyAsync(
-                        sourceEncryptor.Object,
-                        id,
-                        algorithm,
-                        cancellationToken,
-                        decryptEntered,
-                        allowDecrypt.Task));
+            BlockingKeyAccessorEncryptor blockingEncryptor = new (
+                sourceEncryptor,
+                decryptEntered,
+                allowDecrypt.Task);
             Mock<TransactionalBatchResponse> response = CreateResponse(
                 resultStreamFactory: _ => encryptedStream);
             Mock<TransactionalBatch> inner = new ();
@@ -440,7 +431,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 .Returns(inner.Object);
             inner.Setup(instance => instance.ExecuteAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(response.Object);
-            EncryptionTransactionalBatch batch = CreateBatch(inner, blockingEncryptor.Object);
+            EncryptionTransactionalBatch batch = CreateBatch(inner, blockingEncryptor);
             batch.ReadItem("first");
             Task<TransactionalBatchResponse> executeTask = batch.ExecuteAsync();
             await decryptEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -650,7 +641,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         [DataRow("Upsert")]
         public async Task EncryptedWrite_ContainerStreamDefault_UsesNewtonsoftForWriteAndResponse(string operation)
         {
-            Mock<Encryptor> encryptor = CreateMdeEncryptor("dekId");
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = CreateMdeEncryptor("dekId");
             Stream encryptedPayload = null;
             EncryptionTransactionalBatch batch = CreateBatch(
                 setupOperation: inner =>
@@ -717,7 +708,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         [TestMethod]
         public async Task EncryptedWrite_ExplicitStream_UsesStreamForWriteAndResponse()
         {
-            Mock<Encryptor> encryptor = CreateMdeEncryptor("dekId");
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = CreateMdeEncryptor("dekId");
             Stream encryptedPayload = null;
             TransactionalBatchItemRequestOptions forwardedRequestOptions = null;
             EncryptionTransactionalBatch batch = CreateBatch(
@@ -1009,7 +1000,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         [TestMethod]
         public async Task ExecuteAsync_WhenLaterResultDecryptionFails_ConsumesMetadataAndDisposesInnerResponse()
         {
-            Mock<Encryptor> encryptor = CreateMdeEncryptor("dekId");
+            TestEncryptorFactory.MdeConcreteEncryptor encryptor = CreateMdeEncryptor("dekId");
             TrackingStream encryptedStream = await CreateTrackingEncryptedPayloadAsync(encryptor.Object);
             MemoryStream malformedStream = new (Encoding.UTF8.GetBytes("{not-json"));
             int innerDisposeCount = 0;
@@ -1061,57 +1052,9 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 defaultJsonProcessor);
         }
 
-        private static Mock<Encryptor> CreateMdeEncryptor(string dekId)
+        private static TestEncryptorFactory.MdeConcreteEncryptor CreateMdeEncryptor(string dekId)
         {
-            Mock<DataEncryptionKey> dataEncryptionKey = new ();
-            dataEncryptionKey.SetupGet(key => key.EncryptionAlgorithm)
-                .Returns(CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized);
-            dataEncryptionKey.Setup(key => key.GetEncryptByteCount(It.IsAny<int>()))
-                .Returns<int>(length => length);
-            dataEncryptionKey.Setup(key => key.GetDecryptByteCount(It.IsAny<int>()))
-                .Returns<int>(length => length);
-            dataEncryptionKey.Setup(key => key.EncryptData(It.IsAny<byte[]>()))
-                .Returns<byte[]>(TestCommon.EncryptData);
-            dataEncryptionKey.Setup(key => key.EncryptData(
-                    It.IsAny<byte[]>(),
-                    It.IsAny<int>(),
-                    It.IsAny<int>(),
-                    It.IsAny<byte[]>(),
-                    It.IsAny<int>()))
-                .Returns((byte[] input, int offset, int length, byte[] output, int outputOffset) =>
-                    TestCommon.EncryptData(input, offset, length, output, outputOffset));
-            dataEncryptionKey.Setup(key => key.DecryptData(It.IsAny<byte[]>()))
-                .Returns<byte[]>(TestCommon.DecryptData);
-            dataEncryptionKey.Setup(key => key.DecryptData(
-                    It.IsAny<byte[]>(),
-                    It.IsAny<int>(),
-                    It.IsAny<int>(),
-                    It.IsAny<byte[]>(),
-                    It.IsAny<int>()))
-                .Returns((byte[] input, int offset, int length, byte[] output, int outputOffset) =>
-                    TestCommon.DecryptData(input, offset, length, output, outputOffset));
-
-            Mock<Encryptor> encryptor = new ();
-            encryptor.Setup(instance => instance.GetEncryptionKeyAsync(
-                    dekId,
-                    It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(dataEncryptionKey.Object);
-            encryptor.Setup(instance => instance.EncryptAsync(
-                    It.IsAny<byte[]>(),
-                    dekId,
-                    It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync((byte[] plaintext, string _, string _, CancellationToken _) =>
-                    TestCommon.EncryptData(plaintext));
-            encryptor.Setup(instance => instance.DecryptAsync(
-                    It.IsAny<byte[]>(),
-                    dekId,
-                    It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync((byte[] ciphertext, string _, string _, CancellationToken _) =>
-                    TestCommon.DecryptData(ciphertext));
-            return encryptor;
+            return TestEncryptorFactory.CreateMde(dekId);
         }
 
         private static EncryptionTransactionalBatch CreateBatch(
@@ -1303,7 +1246,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         }
 
         private static async Task<DataEncryptionKey> WaitForKeyAsync(
-            Encryptor encryptor,
+            IDataEncryptionKeyAccessor encryptor,
             string id,
             string algorithm,
             CancellationToken cancellationToken,
@@ -1313,6 +1256,63 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             entered.SetResult(true);
             await allowed;
             return await encryptor.GetEncryptionKeyAsync(id, algorithm, cancellationToken);
+        }
+
+        private sealed class BlockingKeyAccessorEncryptor : Encryptor, IDataEncryptionKeyAccessor
+        {
+            private readonly TestEncryptorFactory.MdeConcreteEncryptor inner;
+            private readonly TaskCompletionSource<bool> entered;
+            private readonly Task allowed;
+
+            public BlockingKeyAccessorEncryptor(
+                TestEncryptorFactory.MdeConcreteEncryptor inner,
+                TaskCompletionSource<bool> entered,
+                Task allowed)
+            {
+                this.inner = inner;
+                this.entered = entered;
+                this.allowed = allowed;
+            }
+
+            public Task<DataEncryptionKey> GetEncryptionKeyAsync(
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken)
+            {
+                return WaitForKeyAsync(
+                    this.inner,
+                    dataEncryptionKeyId,
+                    encryptionAlgorithm,
+                    cancellationToken,
+                    this.entered,
+                    this.allowed);
+            }
+
+            public override Task<byte[]> EncryptAsync(
+                byte[] plainText,
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken = default)
+            {
+                return this.inner.EncryptAsync(
+                    plainText,
+                    dataEncryptionKeyId,
+                    encryptionAlgorithm,
+                    cancellationToken);
+            }
+
+            public override Task<byte[]> DecryptAsync(
+                byte[] cipherText,
+                string dataEncryptionKeyId,
+                string encryptionAlgorithm,
+                CancellationToken cancellationToken = default)
+            {
+                return this.inner.DecryptAsync(
+                    cipherText,
+                    dataEncryptionKeyId,
+                    encryptionAlgorithm,
+                    cancellationToken);
+            }
         }
 
         private static EncryptionOptions CreateLegacyEncryptionOptions(string dekId)

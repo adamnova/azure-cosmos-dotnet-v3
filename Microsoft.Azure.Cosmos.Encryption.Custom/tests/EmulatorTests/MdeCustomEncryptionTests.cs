@@ -1213,7 +1213,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
             Assert.AreEqual(expected.Sensitive, actual.Sensitive);
         }
 
-        private sealed class BatchFixtureEncryptor : Encryptor
+        private sealed class BatchFixtureEncryptor : Encryptor, IDataEncryptionKeyAccessor
         {
             private readonly Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey legacyDataEncryptionKey;
             private readonly Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey mdeDataEncryptionKey;
@@ -1226,7 +1226,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.EmulatorTests
                 this.mdeDataEncryptionKey = mdeDataEncryptionKey;
             }
 
-            public override Task<Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey>
+            public Task<Microsoft.Azure.Cosmos.Encryption.Custom.DataEncryptionKey>
                 GetEncryptionKeyAsync(
                     string dataEncryptionKeyId,
                     string encryptionAlgorithm,

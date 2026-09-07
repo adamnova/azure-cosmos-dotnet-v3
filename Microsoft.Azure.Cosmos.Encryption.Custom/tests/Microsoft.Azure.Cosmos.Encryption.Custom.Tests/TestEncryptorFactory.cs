@@ -4,9 +4,13 @@
 namespace Microsoft.Azure.Cosmos.Encryption.Tests
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Linq.Expressions;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.Encryption.Custom;
+    using Microsoft.VisualStudio.TestTools.UnitTesting;
     using Moq;
 
     /// <summary>
@@ -22,6 +26,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
         {
             private readonly string dekId;
             private readonly DataEncryptionKey dek;
+            private readonly List<string> keyAccessAlgorithms = new ();
 
             public MdeConcreteEncryptor(string dekId, DataEncryptionKey dek)
             {
@@ -36,9 +41,44 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
                 string encryptionAlgorithm,
                 CancellationToken cancellationToken = default)
             {
+                this.keyAccessAlgorithms.Add(encryptionAlgorithm);
                 return dataEncryptionKeyId == this.dekId
                     ? Task.FromResult(this.dek)
                     : throw new InvalidOperationException("DEK not found");
+            }
+
+            public int GetKeyAccessCount(string encryptionAlgorithm)
+            {
+                return this.keyAccessAlgorithms.Count(
+                    candidate => string.Equals(candidate, encryptionAlgorithm, StringComparison.Ordinal));
+            }
+
+            public void Verify(
+                Expression<Func<IDataEncryptionKeyAccessor, Task<DataEncryptionKey>>> expression,
+                Times times)
+            {
+                if (!times.Equals(Times.Never()))
+                {
+                    throw new NotSupportedException("Only Times.Never is required by the compatibility adapter.");
+                }
+
+                MethodCallExpression call = (MethodCallExpression)expression.Body;
+                string encryptionAlgorithm = (call.Arguments[1] as ConstantExpression)?.Value as string;
+                int callCount = encryptionAlgorithm == null
+                    ? this.keyAccessAlgorithms.Count
+                    : this.GetKeyAccessCount(encryptionAlgorithm);
+                if (callCount != 0)
+                {
+                    throw new AssertFailedException(
+                        $"Expected no key-access calls, but observed {callCount}.");
+                }
+            }
+
+            public void Verify(
+                Expression<Func<IDataEncryptionKeyAccessor, Task<DataEncryptionKey>>> expression,
+                Func<Times> times)
+            {
+                this.Verify(expression, times());
             }
 
             public override Task<byte[]> EncryptAsync(
@@ -113,7 +153,14 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
 
         public static MdeConcreteEncryptor CreateMde(string dekId)
         {
-            return new MdeConcreteEncryptor(dekId, new MdeConcreteDataEncryptionKey());
+            return CreateMde(dekId, out _);
+        }
+
+        public static MdeConcreteEncryptor CreateMde(string dekId, out DataEncryptionKey dataEncryptionKey)
+        {
+            MdeConcreteDataEncryptionKey dek = new ();
+            dataEncryptionKey = dek;
+            return new MdeConcreteEncryptor(dekId, dek);
         }
 
         public static Mock<Encryptor> CreateLegacy(string dekId)

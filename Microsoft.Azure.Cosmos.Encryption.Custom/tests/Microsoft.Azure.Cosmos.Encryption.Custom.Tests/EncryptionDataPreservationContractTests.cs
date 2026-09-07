@@ -24,7 +24,7 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             "{\"id\":\"date-preservation\",\"PK\":\"pk\",\"Sensitive\":{\"utc\":\"2026-09-07T09:54:44.238Z\",\"offset\":\"2026-09-07T11:54:44.2381234+02:00\",\"dateOnly\":\"2026-09-07\",\"nested\":{\"timestamp\":\"1999-12-31T23:59:59.9999999-07:30\",\"control\":\"not-a-date\"},\"array\":[\"2020-01-02T03:04:05.6789012Z\",{\"timestamp\":\"2038-01-19T03:14:07.0000001+05:45\"},\"plain-control\"],\"largeInteger\":9007199254740993},\"NonSensitive\":\"control\"}";
 
         private static Mock<Encryptor> legacyEncryptor;
-        private static Mock<Encryptor> mdeEncryptor;
+        private static TestEncryptorFactory.MdeConcreteEncryptor mdeEncryptor;
 
         [ClassInitialize]
         public static void ClassInitialize(TestContext context)

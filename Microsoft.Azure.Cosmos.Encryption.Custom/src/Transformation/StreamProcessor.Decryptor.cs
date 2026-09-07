@@ -419,15 +419,12 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 return null;
             }
 
-#pragma warning disable CS0618
-            if (encryptionProperties.EncryptionAlgorithm != CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized)
+            if (!IsLegacyEncryptionAlgorithm(encryptionProperties.EncryptionAlgorithm))
             {
-                throw new NotSupportedException(
-                    $"JsonProcessor.Stream is not supported for encryption algorithm '{encryptionProperties.EncryptionAlgorithm}'. Only '{CosmosEncryptionAlgorithm.MdeAeadAes256CbcHmac256Randomized}' is supported with the Stream processor.");
+                ValidateMdeEncryptionAlgorithm(encryptionProperties.EncryptionAlgorithm);
+                EncryptionProcessor.ValidateMdeEncryptionProperties(encryptionProperties);
             }
-#pragma warning restore CS0618
 
-            EncryptionProcessor.ValidateMdeEncryptionProperties(encryptionProperties);
             return encryptionProperties;
         }
 
