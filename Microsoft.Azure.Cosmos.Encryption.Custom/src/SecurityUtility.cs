@@ -80,20 +80,44 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
 
             Debug.Assert(buffer1.Length >= lengthToCompare, "invalid lengthToCompare");
             Debug.Assert(buffer2Index > -1 && buffer2Index < buffer2.Length, "invalid index");
+
+            // Length/index checks are on non-secret sizes, so returning early here leaks no timing
+            // about the compared bytes. Requiring both buffers to hold the full lengthToCompare also
+            // closes a footgun where a shorter buffer1 previously matched on a prefix.
             if ((buffer2.Length - buffer2Index) < lengthToCompare)
             {
                 return false;
             }
 
-            for (int index = 0; index < buffer1.Length && index < lengthToCompare; ++index)
+            if (lengthToCompare <= 0)
             {
-                if (buffer1[index] != buffer2[buffer2Index + index])
-                {
-                    return false;
-                }
+                return true;
             }
 
-            return true;
+            if (buffer2Index < 0)
+            {
+                throw new IndexOutOfRangeException();
+            }
+
+            if (buffer1.Length < lengthToCompare)
+            {
+                return false;
+            }
+
+#if NET8_0_OR_GREATER
+            return CryptographicOperations.FixedTimeEquals(
+                buffer1.AsSpan(0, lengthToCompare),
+                buffer2.AsSpan(buffer2Index, lengthToCompare));
+#else
+            // CryptographicOperations.FixedTimeEquals is not exposed by netstandard2.0.
+            int accumulatedDifference = 0;
+            for (int index = 0; index < lengthToCompare; ++index)
+            {
+                accumulatedDifference |= buffer1[index] ^ buffer2[buffer2Index + index];
+            }
+
+            return accumulatedDifference == 0;
+#endif
         }
 
         /// <summary>

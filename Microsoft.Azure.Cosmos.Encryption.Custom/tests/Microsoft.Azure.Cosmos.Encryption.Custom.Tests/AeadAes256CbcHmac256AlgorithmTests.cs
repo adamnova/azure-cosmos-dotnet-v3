@@ -56,5 +56,41 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests
             Assert.AreEqual(plainTextBytes.Length, decryptedBytes);
             Assert.IsTrue(plainTextBytes.SequenceEqual(decrypted.AsSpan(0, decryptedBytes).ToArray()));
         }
+
+        [TestMethod]
+        public void DecryptDataTamperedAuthenticationTagIsRejectedAtEveryPosition()
+        {
+            byte[] plainText = Enumerable.Range(0, 16).Select(value => (byte)value).ToArray();
+            byte[] cipherText = algorithm.EncryptData(plainText);
+            const int AuthenticationTagOffset = 1;
+            const int AuthenticationTagLength = 32;
+
+            for (int index = 0; index < AuthenticationTagLength; index++)
+            {
+                byte[] tamperedCipherText = (byte[])cipherText.Clone();
+                tamperedCipherText[AuthenticationTagOffset + index] ^= 0xFF;
+
+                ArgumentException exception = Assert.ThrowsException<ArgumentException>(
+                    () => algorithm.DecryptData(tamperedCipherText),
+                    $"A modified authentication tag byte at position {index} must be rejected.");
+
+                Assert.AreEqual("cipherText", exception.ParamName);
+                StringAssert.Contains(exception.Message, "Invalid authentication tag in cipher text.");
+            }
+        }
+
+        [TestMethod]
+        public void DecryptDataTamperedCipherTextIsRejected()
+        {
+            byte[] plainText = Enumerable.Range(0, 16).Select(value => (byte)value).ToArray();
+            byte[] tamperedCipherText = algorithm.EncryptData(plainText);
+            tamperedCipherText[tamperedCipherText.Length - 1] ^= 0xFF;
+
+            ArgumentException exception = Assert.ThrowsException<ArgumentException>(
+                () => algorithm.DecryptData(tamperedCipherText));
+
+            Assert.AreEqual("cipherText", exception.ParamName);
+            StringAssert.Contains(exception.Message, "Invalid authentication tag in cipher text.");
+        }
     }
 }
