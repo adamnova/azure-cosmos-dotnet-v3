@@ -1055,10 +1055,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                         changes,
                         this.Encryptor,
                         this.DefaultJsonProcessor,
-                        cancellationToken);
+                        cancellationToken,
+                        returnInputIfUnchanged: true);
 
-                    // Call the original passed in delegate
-                    await onChangesDelegate(context, decryptedChanges, cancellationToken);
+                    try
+                    {
+                        // Call the original passed in delegate
+                        await onChangesDelegate(context, decryptedChanges, cancellationToken);
+                    }
+                    finally
+                    {
+                        if (!ReferenceEquals(changes, decryptedChanges))
+                        {
+                            await decryptedChanges.DisposeCompatAsync();
+                        }
+                    }
                 });
         }
 
@@ -1078,10 +1089,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                         changes,
                         this.Encryptor,
                         this.DefaultJsonProcessor,
-                        cancellationToken);
+                        cancellationToken,
+                        returnInputIfUnchanged: true);
 
-                    // Call the original passed in delegate
-                    await onChangesDelegate(context, decryptedChanges, tryCheckpointAsync, cancellationToken);
+                    try
+                    {
+                        // Call the original passed in delegate
+                        await onChangesDelegate(context, decryptedChanges, tryCheckpointAsync, cancellationToken);
+                    }
+                    finally
+                    {
+                        if (!ReferenceEquals(changes, decryptedChanges))
+                        {
+                            await decryptedChanges.DisposeCompatAsync();
+                        }
+                    }
                 });
         }
 

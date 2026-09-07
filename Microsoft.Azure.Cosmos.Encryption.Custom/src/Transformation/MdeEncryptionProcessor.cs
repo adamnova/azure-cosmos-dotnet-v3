@@ -153,6 +153,21 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
             return input;
         }
+
+        public Task<Stream> DecryptJsonArrayStreamAsync(
+            Stream input,
+            Encryptor encryptor,
+            CosmosDiagnosticsContext diagnosticsContext,
+            CancellationToken cancellationToken,
+            bool returnInputIfUnchanged)
+        {
+            return this.StreamProcessor.DecryptJsonArrayStreamAsync(
+                input,
+                encryptor,
+                diagnosticsContext,
+                cancellationToken,
+                returnInputIfUnchanged);
+        }
 #endif
 
         private JsonProcessor GetRequestedJsonProcessor(RequestOptions requestOptions)

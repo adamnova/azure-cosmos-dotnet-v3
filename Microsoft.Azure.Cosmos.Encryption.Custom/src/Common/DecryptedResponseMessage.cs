@@ -49,7 +49,11 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom
                 this.isDisposed = true;
                 if (this.decryptedContent != null)
                 {
-                    this.decryptedContent.Dispose();
+                    if (!ReferenceEquals(this.decryptedContent, this.responseMessage?.Content))
+                    {
+                        this.decryptedContent.Dispose();
+                    }
+
                     this.decryptedContent = null;
                 }
 
