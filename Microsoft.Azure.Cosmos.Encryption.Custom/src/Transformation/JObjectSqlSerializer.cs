@@ -21,6 +21,23 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
 
         private static readonly JsonSerializerSettings JsonSerializerSettings = EncryptionProcessor.JsonSerializerSettings;
 
+        internal static void ValidateTypeMarker(TypeMarker typeMarker)
+        {
+            switch (typeMarker)
+            {
+                case TypeMarker.Null:
+                case TypeMarker.String:
+                case TypeMarker.Double:
+                case TypeMarker.Long:
+                case TypeMarker.Boolean:
+                case TypeMarker.Array:
+                case TypeMarker.Object:
+                    return;
+                default:
+                    throw new NotSupportedException($"Encrypted payload type marker '{(byte)typeMarker}' is not supported.");
+            }
+        }
+
 #pragma warning disable SA1101 // Prefix local calls with this - false positive on SerializeFixed
         internal virtual (TypeMarker typeMarker, byte[] serializedBytes, int serializedBytesCount) Serialize(JToken propertyValue, ArrayPoolManager arrayPoolManager)
         {
@@ -78,8 +95,13 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
             string key,
             ArrayPoolManager<char> arrayPoolManager)
         {
+            ValidateTypeMarker(typeMarker);
+
             switch (typeMarker)
             {
+                case TypeMarker.Null:
+                    jObject[key] = JValue.CreateNull();
+                    break;
                 case TypeMarker.Boolean:
                     jObject[key] = SqlBoolSerializer.Deserialize(serializedBytes);
                     break;
@@ -98,9 +120,6 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 case TypeMarker.Object:
                     jObject[key] = Deserialize<JObject>(serializedBytes);
                     break;
-                default:
-                    Debug.Fail(string.Format("Unexpected type marker {0}", typeMarker));
-                    break;
             }
 
             T Deserialize<T>(ReadOnlySpan<byte> serializedBytes)
@@ -112,9 +131,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Custom.Transformation
                 JsonSerializer serializer = JsonSerializer.Create(JsonSerializerSettings);
 
                 using MemoryTextReader memoryTextReader = new (new Memory<char>(buffer, 0, length));
-                using JsonTextReader reader = new (memoryTextReader);
+                using JsonTextReader reader = new (memoryTextReader)
+                {
+                    DateParseHandling = DateParseHandling.None,
+                };
 
-                return serializer.Deserialize<T>(reader);
+                T value = serializer.Deserialize<T>(reader);
+                if (value == null || reader.Read())
+                {
+                    throw new JsonSerializationException(
+                        $"Decrypted {typeof(T).Name} payload is not a single valid JSON value.");
+                }
+
+                return value;
             }
         }
 #pragma warning restore SA1101 // Prefix local calls with this

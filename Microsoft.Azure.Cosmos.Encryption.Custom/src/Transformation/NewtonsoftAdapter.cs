@@ -26,9 +26,33 @@ internal sealed class NewtonsoftAdapter : IMdeJsonProcessorAdapter
         this.jObjectProcessor = jObjectProcessor;
     }
 
-    public Task<Stream> EncryptAsync(Stream input, Encryptor encryptor, EncryptionOptions options, CancellationToken cancellationToken)
+    public Task<Stream> EncryptAsync(
+        Stream input,
+        Encryptor encryptor,
+        EncryptionOptions options,
+        CancellationToken cancellationToken)
     {
-        return this.jObjectProcessor.EncryptAsync(input, encryptor, options, cancellationToken);
+        return this.EncryptAsync(
+            input,
+            encryptor,
+            options,
+            cancellationToken,
+            replacePlaintextEncryptionMetadata: false);
+    }
+
+    public Task<Stream> EncryptAsync(
+        Stream input,
+        Encryptor encryptor,
+        EncryptionOptions options,
+        CancellationToken cancellationToken,
+        bool replacePlaintextEncryptionMetadata)
+    {
+        return this.jObjectProcessor.EncryptAsync(
+            input,
+            encryptor,
+            options,
+            cancellationToken,
+            replacePlaintextEncryptionMetadata);
     }
 
     public Task EncryptAsync(Stream input, Stream output, Encryptor encryptor, EncryptionOptions options, JsonProcessor jsonProcessor, CancellationToken cancellationToken)
@@ -90,7 +114,7 @@ internal sealed class NewtonsoftAdapter : IMdeJsonProcessorAdapter
     {
         input.Position = 0;
         JObject itemJObj = this.ReadJObject(input);
-        JObject encryptionProperties = this.RetrieveEncryptionProperties(itemJObj);
+        JObject encryptionProperties = EncryptionProcessor.RetrieveEncryptionProperties(itemJObj);
         if (encryptionProperties == null)
         {
             input.Position = 0;
@@ -124,16 +148,5 @@ internal sealed class NewtonsoftAdapter : IMdeJsonProcessorAdapter
         };
 
         return Newtonsoft.Json.JsonSerializer.Create(settings).Deserialize<JObject>(jsonTextReader);
-    }
-
-    private JObject RetrieveEncryptionProperties(JObject item)
-    {
-        JProperty encryptionPropertiesJProp = item.Property(Constants.EncryptedInfo);
-        if (encryptionPropertiesJProp?.Value is JObject jObject)
-        {
-            return jObject;
-        }
-
-        return null;
     }
 }

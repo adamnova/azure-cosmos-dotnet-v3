@@ -218,16 +218,19 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation
         [DataRow("42")]
         [DataRow("true")]
         [DataRow("[1,2,3]")]
-        public async Task ReadAsync_WhenLastTopLevelEiIsNonObject_ReturnsNull(string nonObjectEi)
+        public async Task ReadAsync_WhenLastTopLevelEiIsMalformedNonNull_Throws(string nonObjectEi)
         {
             string json = "{\"id\":\"a\",\"_ei\":" + nonObjectEi + "}";
-            JObject newtonsoftDocument = JObject.Parse(json);
-            Assert.IsFalse(newtonsoftDocument[Constants.EncryptedInfo] is JObject);
             await using MemoryStream stream = new (Encoding.UTF8.GetBytes(json));
 
-            EncryptionProperties result = await EncryptionPropertiesStreamReader.ReadAsync(stream, Options, CancellationToken.None);
+            JsonException exception = await Assert.ThrowsExceptionAsync<JsonException>(
+                async () => await EncryptionPropertiesStreamReader.ReadAsync(
+                    stream,
+                    Options,
+                    CancellationToken.None));
 
-            Assert.IsNull(result);
+            StringAssert.Contains(exception.Message, Constants.EncryptedInfo);
+            StringAssert.Contains(exception.Message, "object or null");
             Assert.AreEqual(0, stream.Position);
         }
 
@@ -236,16 +239,20 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation
         [DataRow("42")]
         [DataRow("false")]
         [DataRow("[1,2,3]")]
-        public async Task ReadAsync_WhenValidEiIsFollowedByNonObjectEi_ReturnsNull(string nonObjectEi)
+        public async Task ReadAsync_WhenValidEiIsFollowedByMalformedNonNullEi_Throws(
+            string nonObjectEi)
         {
             string json = "{\"_ei\":{\"_ef\":3,\"_ea\":\"AEAD_AES_256_CBC_HMAC_SHA256_RANDOMIZED\",\"_en\":\"earlierDek\",\"_ep\":[]},\"id\":\"a\",\"_ei\":" + nonObjectEi + "}";
-            JObject newtonsoftDocument = JObject.Parse(json);
-            Assert.IsFalse(newtonsoftDocument[Constants.EncryptedInfo] is JObject);
             await using MemoryStream stream = new (Encoding.UTF8.GetBytes(json));
 
-            EncryptionProperties result = await EncryptionPropertiesStreamReader.ReadAsync(stream, Options, CancellationToken.None);
+            JsonException exception = await Assert.ThrowsExceptionAsync<JsonException>(
+                async () => await EncryptionPropertiesStreamReader.ReadAsync(
+                    stream,
+                    Options,
+                    CancellationToken.None));
 
-            Assert.IsNull(result);
+            StringAssert.Contains(exception.Message, Constants.EncryptedInfo);
+            StringAssert.Contains(exception.Message, "object or null");
             Assert.AreEqual(0, stream.Position);
         }
 

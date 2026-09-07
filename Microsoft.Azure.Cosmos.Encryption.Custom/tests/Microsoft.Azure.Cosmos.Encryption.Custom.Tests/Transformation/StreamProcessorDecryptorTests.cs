@@ -660,15 +660,13 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation
         }
 
         [TestMethod]
-        public async Task Decrypt_EncryptedPathValueIsNumber_NoDecryptionOccurs()
+        public async Task Decrypt_EncryptedPathValueIsNumber_RejectsWithoutPublishingOutput()
         {
-            // Arrange
             var doc = new { id = "1", SensitiveStr = "abc" };
             string[] paths = new[] { "/SensitiveStr" };
             EncryptionOptions options = CreateOptions(paths);
             (MemoryStream encrypted, EncryptionProperties props) = await EncryptRawAsync(doc, options);
 
-            // Replace the encrypted string token with a number token to bypass decryption logic for that property
             string jsonText = Encoding.UTF8.GetString(encrypted.ToArray());
             using (JsonDocument jd = JsonDocument.Parse(jsonText))
             {
@@ -678,63 +676,74 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation
             }
 
             MemoryStream mutated = new(Encoding.UTF8.GetBytes(jsonText));
-
-            // Act
             MemoryStream output = new();
-            DecryptionContext ctx = await new StreamProcessor().DecryptStreamAsync(mutated, output, mockEncryptor.Object, props, new CosmosDiagnosticsContext(), CancellationToken.None);
+            TrackingMdeEncryptor trackingEncryptor = new ();
+            StreamProcessor processor = new () { Encryptor = trackingEncryptor };
+            byte[] mutatedBytes = mutated.ToArray();
 
-            // Assert: value remains number and path is not recorded as decrypted
-            output.Position = 0;
-            using JsonDocument outDoc = JsonDocument.Parse(output);
-            Assert.AreEqual(123, outDoc.RootElement.GetProperty("SensitiveStr").GetInt32());
-            Assert.IsFalse(ctx.DecryptionInfoList[0].PathsDecrypted.Contains("/SensitiveStr"));
+            InvalidOperationException exception =
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                    async () => await processor.DecryptStreamAsync(
+                        mutated,
+                        output,
+                        mockEncryptor.Object,
+                        props,
+                        new CosmosDiagnosticsContext(),
+                        CancellationToken.None));
+
+            StringAssert.Contains(exception.Message, "/SensitiveStr");
+            StringAssert.Contains(exception.Message, "base64 ciphertext");
+            Assert.AreEqual(0, trackingEncryptor.DecryptCallCount);
+            Assert.AreEqual(0, output.Length);
+            Assert.IsTrue(mutated.CanRead);
+            CollectionAssert.AreEqual(mutatedBytes, mutated.ToArray());
         }
 
         [TestMethod]
-        public async Task Decrypt_ForgedUnknownTypeMarker_WritesRaw_InvalidJson()
+        public async Task Decrypt_UnknownTypeMarker_RejectsBeforeCryptoOrOutput()
         {
-            // Arrange: create a valid encrypted payload
             var doc = new { id = "1", SensitiveStr = "abc" };
             string[] paths = new[] { "/SensitiveStr" };
             EncryptionOptions options = CreateOptions(paths);
             (MemoryStream encrypted, EncryptionProperties props) = await EncryptRawAsync(doc, options);
-
-            // Replace SensitiveStr with a base64 value whose first byte is an unknown type marker (0xEE)
-            byte[] bogusCipher = new byte[] { 0xEE, 0x01, 0x02, 0x03 };
-            string forgedBase64 = Convert.ToBase64String(bogusCipher);
 
             encrypted.Position = 0;
             MemoryStream forged = new();
             using (JsonDocument jd = JsonDocument.Parse(encrypted, new JsonDocumentOptions { AllowTrailingCommas = true }))
             using (Utf8JsonWriter w = new(forged))
             {
+                byte[] cipherText = Convert.FromBase64String(
+                    jd.RootElement.GetProperty("SensitiveStr").GetString());
+                cipherText[0] = 0xEE;
                 w.WriteStartObject();
                 w.WriteString("id", jd.RootElement.GetProperty("id").GetString());
-                w.WriteString("SensitiveStr", forgedBase64);
+                w.WriteString("SensitiveStr", Convert.ToBase64String(cipherText));
                 w.WritePropertyName(Constants.EncryptedInfo);
                 jd.RootElement.GetProperty(Constants.EncryptedInfo).WriteTo(w);
                 w.WriteEndObject();
             }
             forged.Position = 0;
-
-            // Act
-            // Use a bypass encryptor to return raw bytes that are not valid JSON, exercising the default branch (WriteRawValue)
-            StreamProcessor sp = new StreamProcessor { Encryptor = new AlwaysPlaintextMdeEncryptor("NOT_JSON") };
             MemoryStream output = new();
-            _ = await sp.DecryptStreamAsync(forged, output, mockEncryptor.Object, props, new CosmosDiagnosticsContext(), CancellationToken.None);
-            output.Position = 0;
+            TrackingMdeEncryptor trackingEncryptor = new ();
+            StreamProcessor processor = new () { Encryptor = trackingEncryptor };
+            byte[] forgedBytes = forged.ToArray();
 
-            // Assert: output is not valid JSON due to raw invalid token insertion
-            try
-            {
-                using JsonDocument _ = JsonDocument.Parse(output);
-                Assert.Fail("Expected JSON parse to fail due to raw invalid token");
-            }
-            catch (Exception ex)
-            {
-                // System.Text.Json may throw JsonReaderException (derived) or JsonException depending on runtime
-                Assert.IsTrue(ex is JsonException, $"Unexpected exception type: {ex.GetType()}");
-            }
+            NotSupportedException exception =
+                await Assert.ThrowsExceptionAsync<NotSupportedException>(
+                    async () => await processor.DecryptStreamAsync(
+                        forged,
+                        output,
+                        mockEncryptor.Object,
+                        props,
+                        new CosmosDiagnosticsContext(),
+                        CancellationToken.None));
+
+            StringAssert.Contains(exception.Message, "type marker '238'");
+            StringAssert.Contains(exception.Message, "not supported");
+            Assert.AreEqual(0, trackingEncryptor.DecryptCallCount);
+            Assert.AreEqual(0, output.Length);
+            Assert.IsTrue(forged.CanRead);
+            CollectionAssert.AreEqual(forgedBytes, forged.ToArray());
         }
 
         [TestMethod]
@@ -1307,6 +1316,25 @@ namespace Microsoft.Azure.Cosmos.Encryption.Tests.Transformation
                 byte[] buffer = arrayPoolManager.Rent(this.payload.Length);
                 this.payload.AsSpan().CopyTo(buffer);
                 return (buffer, this.payload.Length);
+            }
+        }
+
+        private sealed class TrackingMdeEncryptor : MdeEncryptor
+        {
+            public int DecryptCallCount { get; private set; }
+
+            internal override (byte[] plainText, int plainTextLength) Decrypt(
+                DataEncryptionKey encryptionKey,
+                byte[] cipherText,
+                int cipherTextLength,
+                ArrayPoolManager arrayPoolManager)
+            {
+                this.DecryptCallCount++;
+                return base.Decrypt(
+                    encryptionKey,
+                    cipherText,
+                    cipherTextLength,
+                    arrayPoolManager);
             }
         }
 
